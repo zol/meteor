@@ -14,7 +14,7 @@ if (Meteor.is_client) {
 
   // Nodes must be instanceof nodeConstr and have name/children.
   // Leaves must have text(), startPos() and endPos().
-  var treeToHtmlBoxes = function (tree, nodeConstr, finalPos) {
+  var treeToHtmlBoxes = function (tree, nodeConstr, finalPos, ownLineTest) {
     var html;
     var curPos = 0;
     var unclosedInfos = [];
@@ -23,12 +23,10 @@ if (Meteor.is_client) {
         var head = obj.name || '';
         var children = obj.children;
         var info = { startPos: curPos };
-        var isStatement = (head.indexOf('Stmnt') >= 0 ||
-                           head === "comment" ||
-                           head === "functionDecl");
+        var getsOwnLine = (ownLineTest && ownLineTest(head));
         var html = Spark.setDataContext(
           info,
-          '<div class="box named' + (isStatement ? ' statement' : '') +
+          '<div class="box named' + (getsOwnLine ? ' statement' : '') +
             '"><div class="box head">' + Handlebars._escape(head) + '</div>' +
             _.map(children, toHtml).join('') + '</div>');
         unclosedInfos.push(info);
@@ -117,13 +115,21 @@ if (Meteor.is_client) {
           Handlebars._escape(parseError.toString()) + '</div>';
       }
       if (tree) {
-        html = treeToHtmlBoxes(tree, ParseNode, parser.lexer.pos);
+        html = treeToHtmlBoxes(
+          tree, ParseNode, parser.lexer.pos,
+          function (name) {
+            return (name.indexOf('Stmnt') >= 0 ||
+                    name === "comment" || name === "functionDecl");
+          });
       }
 
       return new Handlebars.SafeString(html);
     } else if (outputType === "rockdownparse") {
       var tree = Rockdown.parseLines(input);
-      var html = treeToHtmlBoxes(tree, Rockdown.Node, input.length);
+      var html = treeToHtmlBoxes(
+        tree, Rockdown.Node, input.length, function (name) {
+          return name === "physicalLine";
+        });
       return new Handlebars.SafeString(html);
 
     } else return ''; // unknown output tab?
