@@ -40,7 +40,7 @@ Rockdown.parseLines = function (input) {
   var match;
   while ((match = rPhysicalLine.exec(terminatedInput))) {
     physicalLines.push(new Rockdown.Node('physicalLine', [
-      new Rockdown.Token(match.index, match[0])]));
+      new Rockdown.Token(match.index, match[0].slice(0,-1))]));
   }
 
   return new Rockdown.Node('document', physicalLines);

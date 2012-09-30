@@ -42,6 +42,7 @@ if (Meteor.is_client) {
         // insert zero-width spaces to allow wrapping
         text = text.replace(/.{20}/g, "$&\u200b");
         text = Handlebars._escape(text);
+        text = text || '\u200b';
         text = text.replace(/\u200b/g, '&#8203;');
         text = text.replace(/\n/g, '<br>');
         return Spark.setDataContext(

@@ -47,7 +47,8 @@ ParseNode.stringify = function (tree, optConstructor) {
     str += '(';
     var escapedChildren = [];
     for(var i = 0, N = tree.children.length; i < N; i++)
-      escapedChildren.push(ParseNode.stringify(tree.children[i]));
+      escapedChildren.push(ParseNode.stringify(tree.children[i],
+                                               optConstructor));
     str += escapedChildren.join(' ');
     str += ')';
     return str;
@@ -67,7 +68,7 @@ ParseNode.unstringify = function (str, optConstructor) {
   var state = {
     i: 0,
     getParseError: function (expecting) {
-      throw new Error("unstringify: Expecting " + expecting +", found " +
+      throw new Error("unstringify: Expecting " + expecting + ", found " +
                       (lexemes[this.i] || "end of string"));
     },
     peek: function () { return lexemes[this.i]; },
@@ -81,7 +82,7 @@ ParseNode.unstringify = function (str, optConstructor) {
       return chr;
     });
   };
-  var EMPTY_STRING = [""];
+  var EMPTY_STRING = {};
   var token = new Parser('token', function (t) {
     var txt = t.peek();
     if (!txt || txt.charAt(0) === '(' || txt.charAt(0) === ')')
@@ -101,13 +102,13 @@ ParseNode.unstringify = function (str, optConstructor) {
                 Parsers.opt(Parsers.seq(
                   paren('('), Parsers.opt(Parsers.list(item)), paren(')')))),
     function (v) {
-      for(var i = 0, N = v.length; i < N; i++)
-        if (v[i] === EMPTY_STRING)
-          v[i] = "";
-
       if (v.length === 1)
         // token
         return v[0];
+
+      for(var i = 0, N = v.length; i < N; i++)
+        if (v[i] === EMPTY_STRING)
+          v[i] = "";
       // node. exclude parens
       return new (optConstructor || ParseNode)(v[0], v.slice(2, -1));
     });
@@ -116,7 +117,10 @@ ParseNode.unstringify = function (str, optConstructor) {
     return t.i === N ? [] : null;
   });
 
-  return Parsers.seq(item, endOfString).parseRequired(state)[0];
+  var resultItem = Parsers.seq(item, endOfString).parseRequired(state)[0];
+  if (resultItem === EMPTY_STRING)
+    return "";
+  return resultItem;
 };
 
 })();
