@@ -4,7 +4,7 @@ Package.describe({
 });
 
 Package.on_use(function (api) {
-  api.add_files(['lexer.js'],
+  api.add_files(['rockdown.js'],
                 ['client', 'server']);
 });
 

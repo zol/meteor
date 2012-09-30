@@ -12,6 +12,57 @@ if (Meteor.is_client) {
     return Session.get("input") || '';
   };
 
+  // Nodes must be instanceof nodeConstr and have name/children.
+  // Leaves must have text(), startPos() and endPos().
+  var treeToHtmlBoxes = function (tree, nodeConstr, finalPos) {
+    var html;
+    var curPos = 0;
+    var unclosedInfos = [];
+    var toHtml = function (obj) {
+      if (obj instanceof nodeConstr) {
+        var head = obj.name || '';
+        var children = obj.children;
+        var info = { startPos: curPos };
+        var isStatement = (head.indexOf('Stmnt') >= 0 ||
+                           head === "comment" ||
+                           head === "functionDecl");
+        var html = Spark.setDataContext(
+          info,
+          '<div class="box named' + (isStatement ? ' statement' : '') +
+            '"><div class="box head">' + Handlebars._escape(head) + '</div>' +
+            _.map(children, toHtml).join('') + '</div>');
+        unclosedInfos.push(info);
+        return html;
+      } else if (obj.text) {
+        // token
+        _.each(unclosedInfos, function (info) {
+          info.endPos = curPos;
+        });
+        curPos = obj.endPos();
+        unclosedInfos.length = 0;
+        var text = obj.text();
+        // insert zero-width spaces to allow wrapping
+        text = text.replace(/.{20}/g, "$&\u200b");
+        text = Handlebars._escape(text);
+        text = text.replace(/\u200b/g, '&#8203;');
+        text = text.replace(/\n/g, '<br>');
+        return Spark.setDataContext(
+          obj,
+          '<div class="box token">' + text + '</div>');
+      } else {
+        // other?
+        return '<div class="box other">' +
+          Handlebars._escape(JSON.stringify(obj)) + '</div>';
+      }
+    };
+    html = toHtml(tree);
+    curPos = finalPos;
+    _.each(unclosedInfos, function (info) {
+      info.endPos = curPos;
+    });
+    return html;
+  };
+
   Template.page.output = function () {
     var input = Session.get("input") || "";
 
@@ -66,55 +117,16 @@ if (Meteor.is_client) {
           Handlebars._escape(parseError.toString()) + '</div>';
       }
       if (tree) {
-        var curPos = 0;
-        var unclosedInfos = [];
-        var toHtml = function (obj) {
-          if (obj instanceof ParseNode) {
-            var head = obj.name || '';
-            var children = obj.children;
-            var info = { startPos: curPos };
-            var isStatement = (head.indexOf('Stmnt') >= 0 ||
-                               head === "comment" ||
-                               head === "functionDecl");
-            var html = Spark.setDataContext(
-              info,
-              '<div class="box named' + (isStatement ? ' statement' : '') +
-                '"><div class="box head">' + Handlebars._escape(head) + '</div>' +
-                _.map(children, toHtml).join('') + '</div>');
-            unclosedInfos.push(info);
-            return html;
-          } else if (obj.text) {
-            // token
-            _.each(unclosedInfos, function (info) {
-              info.endPos = curPos;
-            });
-            curPos = obj.endPos();
-            unclosedInfos.length = 0;
-            var text = obj.text();
-            // insert zero-width spaces to allow wrapping
-            text = text.replace(/.{20}/g, "$&\u200b");
-            text = Handlebars._escape(text);
-            text = text.replace(/\u200b/g, '&#8203;');
-            text = text.replace(/\n/g, '<br>');
-            return Spark.setDataContext(
-              obj,
-              '<div class="box token">' + text + '</div>');
-          } else {
-            // other?
-            return '<div class="box other">' +
-              Handlebars._escape(JSON.stringify(obj)) + '</div>';
-          }
-        };
-        html = toHtml(tree);
-        curPos = parser.lexer.pos;
-        _.each(unclosedInfos, function (info) {
-          info.endPos = curPos;
-        });
+        html = treeToHtmlBoxes(tree, ParseNode, parser.lexer.pos);
       }
 
       return new Handlebars.SafeString(html);
-    }
-    else return ''; // unknown output tab?
+    } else if (outputType === "rockdownparse") {
+      var tree = Rockdown.parseLines(input);
+      var html = treeToHtmlBoxes(tree, Rockdown.Node, input.length);
+      return new Handlebars.SafeString(html);
+
+    } else return ''; // unknown output tab?
   };
 
   Template.page.events({
@@ -153,8 +165,9 @@ if (Meteor.is_client) {
 
   Template.page.outputTypes = [
     {name: "JS Lex", value: "jslex"},
-    {name: "JS Parse", value: "jsparse"}
-  ];
+    {name: "JS Parse", value: "jsparse"},
+    {name: "Rockdown Parse", value: "rockdownparse"}
+ ];
 
   Template.page.is_outputtype_selected = function (which) {
     return Session.equals("output-type", which) ? "selected" : "";
