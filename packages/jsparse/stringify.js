@@ -41,8 +41,8 @@ var backtickUnescape = function (str) {
   return str;
 };
 
-ParseNode.stringify = function (tree) {
-  if (tree instanceof ParseNode) {
+ParseNode.stringify = function (tree, optConstructor) {
+  if (tree instanceof (optConstructor || ParseNode)) {
     var str = backtickEscape(tree.name);
     str += '(';
     var escapedChildren = [];
@@ -61,7 +61,7 @@ ParseNode.stringify = function (tree) {
   return backtickEscape(String(tree));
 };
 
-ParseNode.unstringify = function (str) {
+ParseNode.unstringify = function (str, optConstructor) {
   var lexemes = str.match(/\(|\)|`([^`]||``)*`|`|[^\s()`]+/g) || [];
   var N = lexemes.length;
   var state = {
@@ -109,7 +109,7 @@ ParseNode.unstringify = function (str) {
         // token
         return v[0];
       // node. exclude parens
-      return new ParseNode(v[0], v.slice(2, -1));
+      return new (optConstructor || ParseNode)(v[0], v.slice(2, -1));
     });
 
   var endOfString = new Parser("end of string", function (t) {
