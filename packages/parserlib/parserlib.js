@@ -33,7 +33,7 @@ Parser.prototype.parseRequired = function (t) {
 Parser.prototype.parseRequiredIf = function (t, required) {
   var result = this._run(t);
 
-  if (required && ! result)
+  if (required && result === null)
     throw t.getParseError(this.expecting);
 
   return result;
@@ -43,9 +43,14 @@ Parser.expecting = function (expecting, parser) {
   return new Parser(expecting, parser._run);
 };
 
-
+// XXX docs here about the theory of this library.
+//
 // A parser that consume()s has to succeed.
 // Similarly, a parser that fails can't have consumed.
+//
+// "no match" means === null; parsers are allowed to
+// return falsy values as matches, and non-null falsy
+// values (like false) are considered success.
 
 Parsers = {};
 
@@ -59,7 +64,7 @@ Parsers.assertion = function (test) {
 Parsers.node = function (name, childrenParser) {
   return new Parser(name, function (t) {
     var children = childrenParser.parse(t);
-    if (! children)
+    if (children === null)
       return null;
     if (! isArray(children))
       children = [children];
@@ -75,7 +80,7 @@ Parsers.or = function (/*parsers*/) {
       var result;
       for(var i = 0, N = args.length; i < N; i++) {
         result = args[i].parse(t);
-        if (result)
+        if (result !== null)
           return result;
       }
       return null;
@@ -109,11 +114,11 @@ Parsers.binaryLeft = function (name, termParser, opParsers) {
     termParser.expecting,
     function (t) {
       var result = termParser.parse(t);
-      if (! result)
+      if (result === null)
         return null;
 
       var op;
-      while ((op = opParser.parse(t))) {
+      while ((op = opParser.parse(t)) !== null) {
         result = new ParseNode(
           name,
           [result, op, termParser.parseRequired(t)]);
@@ -131,7 +136,7 @@ Parsers.unary = function (name, termParser, opParser) {
       // if we have unaries, we are committed and
       // have to match a term or error.
       var result = termParser.parseRequiredIf(t, unaries.length);
-      if (! result)
+      if (result === null)
         return null;
 
       while (unaries.length)
@@ -158,19 +163,19 @@ Parsers.list = function (itemParser, sepParser) {
     function (t) {
       var result = [];
       var firstItem = itemParser.parse(t);
-      if (! firstItem)
+      if (firstItem === null)
         return null;
       push(result, firstItem);
 
       if (sepParser) {
         var sep;
-        while ((sep = sepParser.parse(t))) {
+        while ((sep = sepParser.parse(t)) !== null) {
           push(result, sep);
           push(result, itemParser.parseRequired(t));
         }
       } else {
         var item;
-        while ((item = itemParser.parse(t)))
+        while ((item = itemParser.parse(t)) !== null)
           push(result, item);
       }
       return result;
@@ -191,7 +196,7 @@ Parsers.seq = function (/*parsers*/) {
         // first item in sequence can fail, and we
         // fail (without error); after that, error on failure
         var r = args[i].parseRequiredIf(t, i > 0);
-        if (! r)
+        if (r === null)
           return null;
 
         if (isArray(r)) // append array!
@@ -215,7 +220,7 @@ Parsers.and = function (/*parsers*/) {
       var result;
       for(var i = 0, N = args.length; i < N; i++) {
         result = args[i].parse(t);
-        if (! result)
+        if (result === null)
           return null;
       }
       return result;

@@ -9,5 +9,5 @@ Package.on_use(function (api) {
 });
 
 Package.on_test(function (api) {
-  // XXX tested only indirectly by jsparse
+  api.add_files(['parserlib_tests.js'], 'client');
 });

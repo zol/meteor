@@ -40,17 +40,6 @@ JSParser = function (code, options) {
   this.lastCommentConsumed = null;
 
   options = options || {};
-  // pass {tokens:'strings'} to get strings for
-  // tokens instead of token objects
-  if (options.tokens === 'strings') {
-    this.tokenFunc = function (tok) {
-      return tok.text();
-    };
-  } else {
-    this.tokenFunc = function (tok) {
-      return tok;
-    };
-  }
 
   // pass {includeComments: true} to include comments in the AST.
   // For a comment to be included, it must occur where a statement
@@ -134,7 +123,7 @@ JSParser.prototype.getSyntaxTree = function () {
       function (t) {
         if (t.newToken.type() === type && textSet[t.newToken.text()]) {
           t.consumeNewToken();
-          return self.tokenFunc(t.oldToken);
+          return t.oldToken;
         }
         return null;
       });
@@ -144,7 +133,7 @@ JSParser.prototype.getSyntaxTree = function () {
     return new Parser(type, function (t) {
       if (t.newToken.type() === type) {
         t.consumeNewToken();
-        return self.tokenFunc(t.oldToken);
+        return t.oldToken;
       }
       return null;
     });

@@ -82,15 +82,13 @@ ParseNode.unstringify = function (str, optConstructor) {
       return chr;
     });
   };
-  var EMPTY_STRING = {};
   var token = new Parser('token', function (t) {
     var txt = t.peek();
     if (!txt || txt.charAt(0) === '(' || txt.charAt(0) === ')')
       return null;
 
     t.advance();
-    // can't return falsy value from successful parser
-    return backtickUnescape(txt) || EMPTY_STRING;
+    return backtickUnescape(txt);
   });
 
   // Make "item" lazy so it can be recursive.
@@ -105,10 +103,6 @@ ParseNode.unstringify = function (str, optConstructor) {
       if (v.length === 1)
         // token
         return v[0];
-
-      for(var i = 0, N = v.length; i < N; i++)
-        if (v[i] === EMPTY_STRING)
-          v[i] = "";
       // node. exclude parens
       return new (optConstructor || ParseNode)(v[0], v.slice(2, -1));
     });
@@ -117,10 +111,7 @@ ParseNode.unstringify = function (str, optConstructor) {
     return t.i === N ? [] : null;
   });
 
-  var resultItem = Parsers.seq(item, endOfString).parseRequired(state)[0];
-  if (resultItem === EMPTY_STRING)
-    return "";
-  return resultItem;
+  return Parsers.seq(item, endOfString).parseRequired(state)[0];
 };
 
 })();
