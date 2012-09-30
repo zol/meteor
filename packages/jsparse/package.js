@@ -4,7 +4,8 @@ Package.describe({
 });
 
 Package.on_use(function (api) {
-  api.add_files(['lexer.js', 'parserlib.js', 'stringify.js', 'parser.js'],
+  api.use('parserlib');
+  api.add_files(['lexer.js', 'parser.js'],
                 ['client', 'server']);
 });
 
