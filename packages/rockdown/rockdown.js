@@ -66,13 +66,18 @@ Rockdown.Node = function (name, children) {
     throw new Error("Expected array in new ParseNode(" + name + ", ...)");
 };
 
-Rockdown.Token = function (pos, text) {
+Rockdown.Token = function (pos, text, type) {
   this._pos = pos;
   this._text = text;
+  this._type = type;
 };
 
 Rockdown.Token.prototype.text = function () {
   return this._text;
+};
+
+Rockdown.Token.prototype.type = function () {
+  return this._type;
 };
 
 Rockdown.Token.prototype.startPos = function () {
@@ -83,13 +88,27 @@ Rockdown.Token.prototype.endPos = function () {
   return this._pos + this._text.length;
 };
 
-Rockdown._regexes = {
-  fenceBlockquote: new StickyRegex(/\s*>/),
-  rest: new StickyRegex(/.*/)
-};
+Rockdown._regexes = function (regexMap) {
+  // replace all regex with StickyRegexes
+  for (var k in regexMap)
+    if (regexMap[k] instanceof RegExp)
+      regexMap[k] = new StickyRegex(regexMap[k]);
+  return regexMap;
+}({
+  fenceBlockquote: /\s*>/,
+  fenceEnd: /\s*```/,
+  rest: /.*/,
+  nonEmptyRest: /.+/,
+  whitespace: /\s+/
+});
 
 Rockdown.parseLines = function (input) {
   var r = Rockdown._regexes;
+  // containers on the container stack are objects with properties:
+  // {
+  //   node [the parse node]
+  //   blockquoteLevel [if node.name is 'fence']
+  // }
   var containerStack = [];
 
   // Set up our little token reader, reused for each physical line
@@ -97,14 +116,23 @@ Rockdown.parseLines = function (input) {
   // at `pos` in `source`.  `lineStartPos` is the index of the
   // beginning of `source` in the larger input.
   var lineStartPos, source, pos, lastPos;
-  var token = function (stickyRegex) {
+  var token = function (type, stickyRegex) {
     lastPos = pos;
     var result = stickyRegex.matchAt(source, pos);
     if (result === null)
       return null;
     pos += result.length;
     return new Rockdown.Token(lineStartPos + lastPos,
-                              result);
+                              result, type);
+  };
+  var lookAhead = function (stickyRegex) {
+    return stickyRegex.matchAt(source, pos) !== null;
+  };
+  var tokenInto = function (type, stickyRegex, array) {
+    var tok = token(type, stickyRegex);
+    if (tok)
+      array.push(tok);
+    return !! tok;
   };
 
   var docElements = [];
@@ -114,24 +142,40 @@ Rockdown.parseLines = function (input) {
   rPhysicalLine.lastIndex = 0;
   var match;
   while ((match = rPhysicalLine.exec(terminatedInput))) {
-    source = match[0].slice(0, -1);
+    source = match[0];
+    // include '\n' in source, but not the final (fake) one
+    if (rPhysicalLine.lastIndex >= terminatedInput.length)
+      source = source.slice(0, -1);
     lineStartPos = match.index;
     pos = 0;
 
-    //var stackTop = (containerStack.length ?
-    //containerStack[containerStack.length - 1] : null);
-    //if (stackTop && stackTop.name === 'fence') {
-    //
-    //}
-
-    var lineElements = [];
     var tok;
+    var stackTop = (containerStack.length ?
+    containerStack[containerStack.length - 1] : null);
+
+    if (stackTop && stackTop.node.name === 'fence') {
+      var fenceElements = stackTop.node.children;
+      for(var i = 0, N = stackTop.blockquoteLevel; i < N; i++) {
+        if (! tokenInto('INDENT', r.fenceBlockquote, fenceElements))
+          break;
+      }
+      if (lookAhead(r.fenceEnd)) {
+        tokenInto('CONTENT', r.whitespace, fenceElements);
+        tokenInto('FENCEEND', r.fenceEnd, fenceElements);
+        tokenInto('TRAILING', r.nonEmptyRest, fenceElements);
+        containerStack.pop();
+      } else {
+        tokenInto('CONTENT', r.nonEmptyRest, fenceElements);
+      }
+    }
+
+    /*    var lineElements = [];
     while ((tok = token(r.fenceBlockquote))) {
       lineElements.push(tok);
     }
-    lineElements.push(token(r.rest));
+    lineElements.push(token(r.rest));*/
 
-    docElements.push(new Rockdown.Node('line', lineElements));
+    //docElements.push(new Rockdown.Node('line', lineElements));
 
 
     //physicalLines.push(new Rockdown.Node('physicalLine', [
