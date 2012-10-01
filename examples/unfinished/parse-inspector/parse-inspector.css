@@ -120,7 +120,6 @@ html, body { height: 100%; }
   display: inline-block;
   margin: 5px;
   margin-top: 0;
-  background: #fff;
 }
 
 .box.statement {
@@ -132,6 +131,7 @@ html, body { height: 100%; }
 }
 
 .box.named {
+  background: #fff;
   border: 1px solid #888;
   border-radius: 5px;
   cursor: pointer;
@@ -160,7 +160,7 @@ html, body { height: 100%; }
 }
 
 .box.token {
-  background: #ddd;
+  /*background: #ddd;*/
   /*border: 1px solid #999;*/
   border: 1px solid #00f;
   cursor: pointer;

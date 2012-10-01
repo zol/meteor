@@ -13,7 +13,8 @@ if (Meteor.is_client) {
   };
 
   // Nodes must be instanceof nodeConstr and have name/children.
-  // Leaves must have text(), startPos() and endPos().
+  // Leaves must have text(), startPos() and endPos(), and may have
+  // type().
   var treeToHtmlBoxes = function (tree, nodeConstr, finalPos, ownLineTest) {
     var html;
     var curPos = 0;
@@ -39,6 +40,7 @@ if (Meteor.is_client) {
         curPos = obj.endPos();
         unclosedInfos.length = 0;
         var text = obj.text();
+        var type = obj.type && obj.type();
         // insert zero-width spaces to allow wrapping
         text = text.replace(/.{20}/g, "$&\u200b");
         text = Handlebars._escape(text);
@@ -46,9 +48,15 @@ if (Meteor.is_client) {
         text = text.replace(/\u200b/g, '&#8203;');
         text = text.replace(/\n/g, '<br>');
         text = text.replace(/[ \t]/, '&nbsp;');
+        var tagExtras = "", classExtras = "";
+        if (type) {
+          tagExtras += ' title="' + Handlebars._escape(type) + '"';
+          classExtras += ' lex_' + type.toLowerCase();
+        }
         return Spark.setDataContext(
           obj,
-          '<div class="box token">' + text + '</div>');
+          '<div class="box token' + classExtras +
+            '"' + tagExtras + '>' + text + '</div>');
       } else {
         // other?
         return '<div class="box other">' +
