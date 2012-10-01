@@ -95,21 +95,68 @@ Rockdown._regexes = function (regexMap) {
       regexMap[k] = new StickyRegex(regexMap[k]);
   return regexMap;
 }({
-  fenceBlockquote: /\s*>/,
-  fenceEnd: /\s*```/,
-  rest: /.*/,
-  nonEmptyRest: /.+/,
-  whitespace: /\s+/
+  // fenceBlockquote: /\s*>/,
+  // fenceEnd: /\s*```/,
+  // rest: /.*/,
+  nonEmptyRest: /[^\n]+/,
+  whitespace: /[^\S\n]+/,
+  blockquote: />/,
+  bullet: /[*+-](?!\S)/,
+  tagLine: /<[^>]*>(?=[^\S\n]*$)/,
+  singleRule: /---([^\S\n]*-)*(?=[^\S\n]*$)/,
+  doubleRule: /===([^\S\n]*=)*(?=[^\S\n]*$)/,
+  // fenceStart: /```/,
+  // hashHead: /#+/,
+  newline: /\n/
+
 });
+
+Rockdown.Lexer = function (input) {
+  this.input = input;
+  this.pos = 0;
+  this.fenceQuoteLevel = 0;
+  this.lineQuoteLevel = 0;
+  this.mode = "LINESTART";
+};
+
+Rockdown.Lexer.prototype.next = function () {
+  var self = this;
+
+  var token = function (type, stickyRegex) {
+    var pos = self.pos;
+    var result = stickyRegex.matchAt(self.input, pos);
+    if (result === null)
+      return null;
+    self.pos += result.length;
+    return new Rockdown.Token(pos, result, type);
+  };
+  var r = Rockdown._regexes;
+
+  var tok;
+  if (self.mode === "LINESTART") {
+    if ((tok = (token('WHITESPACE', r.whitespace) ||
+                token('BLOCKQUOTE', r.blockquote) ||
+                token('NEWLINE', r.newline))))
+      return tok;
+    self.mode = "OPENERS";
+  }
+  if (self.mode === "OPENERS") {
+    if ((tok = (token('WHITESPACE', r.whitespace) ||
+                token('BLOCKQUOTE', r.blockquote) ||
+                token('NEWLINE', r.newline))))
+      return tok;
+    self.mode = "XXX";
+  }
+};
 
 Rockdown.parseLines = function (input) {
   var r = Rockdown._regexes;
   // containers on the container stack are objects with properties:
   // {
   //   node [the parse node]
-  //   blockquoteLevel [if node.name is 'fence']
   // }
   var containerStack = [];
+  var blockquoteLevel = 0;
 
   // Set up our little token reader, reused for each physical line
   // of the input.  Calling `token(..)` tries to match `stickyRegex`
@@ -154,8 +201,9 @@ Rockdown.parseLines = function (input) {
     containerStack[containerStack.length - 1] : null);
 
     if (stackTop && stackTop.node.name === 'fence') {
+      // in a fence
       var fenceElements = stackTop.node.children;
-      for(var i = 0, N = stackTop.blockquoteLevel; i < N; i++) {
+      for(var i = 0, N = blockquoteLevel; i < N; i++) {
         if (! tokenInto('INDENT', r.fenceBlockquote, fenceElements))
           break;
       }
@@ -165,8 +213,46 @@ Rockdown.parseLines = function (input) {
         tokenInto('TRAILING', r.nonEmptyRest, fenceElements);
         containerStack.pop();
       } else {
+        // includes final '\n' (or only '\n' on blank line)
         tokenInto('CONTENT', r.nonEmptyRest, fenceElements);
       }
+    } else {
+      var indents = [];
+      var numBlockquotes = 0;
+      var numBullets = 0;
+      while ((tok =
+              token('WHITESPACE', r.whitespace) ||
+              token('BLOCKQUOTE', r.blockquote) ||
+              token('BULLET', r.bullet))) {
+        if (tok.type() === 'BLOCKQUOTE')
+          numBlockquotes++;
+        else if (tok.type() === 'BULLET')
+          numBullets++;
+        indents.push(tok);
+      }
+
+      var fullLine = (token('TAGLINE', r.tagLine) ||
+                      token('SINGLERULE', r.singleRule) ||
+                      token('DOUBLERULE', r.doubleRule));
+      var indicator = null;
+      var rest = null;
+      if (! fullLine) {
+        indicator = (token('FENCESTART', r.fenceStart) ||
+                     token('HASHHEAD', r.hashHead));
+        rest = token('CONTENT', rest);
+      }
+      //var isBlank = (! fullLine && !
+
+      if (stackTop && stackTop.node.name === 'textBlock') {
+        // potentially continue a textBlock
+        //if (! fullLine && ! indicator && rest && ! numBullets &&
+        //numBlockquotes <= blockquoteLevel
+      }
+
+
+      // XXX
+      //tokenInto('CONTENT', r.rest, indents);
+      //docElements.push(new Rockdown.Node('line', indents));
     }
 
     /*    var lineElements = [];

@@ -47,7 +47,7 @@ if (Meteor.is_client) {
         text = text || '\u200b';
         text = text.replace(/\u200b/g, '&#8203;');
         text = text.replace(/\n/g, '<br>');
-        text = text.replace(/[ \t]/, '&nbsp;');
+        text = text.replace(/[ \t]/g, '&nbsp;');
         var tagExtras = "", classExtras = "";
         if (type) {
           tagExtras += ' title="' + Handlebars._escape(type) + '"';
