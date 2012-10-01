@@ -171,7 +171,7 @@ var guessIsDivisionPermittedAfterToken = function (tok) {
 
 ////////// PUBLIC API
 
-var Lexeme = function (pos, type, text) {
+var Lexeme = function (pos, text, type) {
   this._pos = pos;
   this._type = type;
   this._text = text;
@@ -293,7 +293,7 @@ JSLexer.prototype.next = function () {
       pos = origPos + 1;
     }
     self.pos = pos;
-    var lex = new JSLexer.Lexeme(origPos, type, code.substring(origPos, pos));
+    var lex = new JSLexer.Lexeme(origPos, code.substring(origPos, pos), type);
     if (self.lastLexeme) {
       self.lastLexeme._next = lex;
       lex._prev = self.lastLexeme;
