@@ -45,6 +45,7 @@ if (Meteor.is_client) {
         text = text || '\u200b';
         text = text.replace(/\u200b/g, '&#8203;');
         text = text.replace(/\n/g, '<br>');
+        text = text.replace(/[ \t]/, '&nbsp;');
         return Spark.setDataContext(
           obj,
           '<div class="box token">' + text + '</div>');
@@ -129,7 +130,7 @@ if (Meteor.is_client) {
       var tree = Rockdown.parseLines(input);
       var html = treeToHtmlBoxes(
         tree, Rockdown.Node, input.length, function (name) {
-          return name === "physicalLine";
+          return /line/i.test(name);
         });
       return new Handlebars.SafeString(html);
 
