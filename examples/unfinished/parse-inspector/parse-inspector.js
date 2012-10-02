@@ -50,7 +50,8 @@ if (Meteor.is_client) {
   // Nodes must be instanceof nodeConstr and have name/children.
   // Leaves must have text(), startPos() and endPos(), and may have
   // type().
-  var treeToHtmlBoxes = function (tree, nodeConstr, finalPos, ownLineTest) {
+  var treeToHtmlBoxes = function (tree, nodeConstr, finalPos, ownLineTest,
+                                  lexClassPrefix) {
     var html;
     var curPos = 0;
     var unclosedInfos = [];
@@ -87,6 +88,8 @@ if (Meteor.is_client) {
         if (type) {
           tagExtras += ' title="' + Handlebars._escape(type) + '"';
           classExtras += ' lex_' + type.toLowerCase();
+          if (lexClassPrefix)
+            classExtras += " " + lexClassPrefix + '_' + type.toLowerCase();
         }
         return Spark.setDataContext(
           obj,
@@ -156,12 +159,14 @@ if (Meteor.is_client) {
       var html = lexToHtml(lexer, 'rdlex');
       return new Handlebars.SafeString(html);
 
-      /*var tree = Rockdown.parseLines(input);
+    } else if (outputType === "rockdownparse") {
+
+      var tree = Rockdown.parse(input);
       var html = treeToHtmlBoxes(
         tree, Rockdown.Node, input.length, function (name) {
-          return /line/i.test(name);
-        });
-      return new Handlebars.SafeString(html);*/
+          return false;
+        }, 'rdlex');
+      return new Handlebars.SafeString(html);
 
     } else return ''; // unknown output tab?
   };
@@ -203,7 +208,8 @@ if (Meteor.is_client) {
   Template.page.outputTypes = [
     {name: "JS Lex", value: "jslex"},
     {name: "JS Parse", value: "jsparse"},
-    {name: "Rockdown Lex", value: "rockdownlex"}
+    {name: "Rockdown Lex", value: "rockdownlex"},
+    {name: "Rockdown Parse", value: "rockdownparse"}
  ];
 
   Template.page.is_outputtype_selected = function (which) {
