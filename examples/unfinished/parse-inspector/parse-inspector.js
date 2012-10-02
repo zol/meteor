@@ -168,6 +168,127 @@ if (Meteor.is_client) {
         }, 'rdlex');
       return new Handlebars.SafeString(html);
 
+    } else if (outputType === "rockdownpreview") {
+      var blockTags = {
+        'quotedBlock': 'blockquote',
+        'list': 'ul',
+        'listItem': 'li',
+        'listItemCompact': 'li'
+      };
+
+      var toHtml = function (obj, quoteLevel) {
+        if (obj.text)
+          return Handlebars._escape(obj.text());
+
+        quoteLevel = quoteLevel || 0;
+        var recurse = function (x) {
+          return toHtml(x, quoteLevel);
+        };
+
+        // this code is messy
+        var name = obj.name;
+        var html = "";
+        switch (obj.name) {
+        case "document":
+        case "quotedBlock":
+        case "list":
+        case "listItem":
+        case "listItemCompact":
+          var tag = blockTags[obj.name];
+          if (tag)
+            html += '<' + tag + '>';
+          var ql = quoteLevel;
+          if (obj.name === "quotedBlock")
+            ql++;
+          _.each(obj.children, function (c, i) {
+            if (c.name === "textBlock" && obj.name !== "listItemCompact")
+              html += "\n<p>" + toHtml(c, ql) + "</p>";
+            else
+              html += toHtml(c, ql);
+          });
+          if (tag)
+            html += '</' + tag + '>';
+          break;
+        case "emdash":
+          html = " &#8212; ";
+          break;
+        case "codeSpan":
+          html += "<code>";
+          for(var i = 1, N = obj.children.length - 1; i < N; i++)
+            // assume children besides first and last are tokens
+            html += Handlebars._escape(obj.children[i].text());
+          html += "</code>";
+          break;
+        case "html":
+        case "singleTag":
+          _.each(obj.children, function (c) {
+            if (c.name === ">")
+              html += ">";
+            else // assume c is a token
+              html += c.text();
+          });
+          break;
+        case "emSpan":
+        case "strongSpan":
+          var tag = obj.name.match(/^[a-z]+/)[0];
+          html += "<" + tag + ">";
+          for(var i = 1, N = obj.children.length - 1; i < N; i++)
+            html += recurse(obj.children[i]);
+          html += "</" + tag + ">";
+          break;
+        case "rule":
+          html += '\n<hr>';
+          break;
+        case "hashHead":
+          var headingLevel = obj.children[0].text().length;
+          html += '<h' + headingLevel + '>';
+          if (obj.children.length > 1)
+            html += recurse(obj.children[1]);
+          html += '</h' + headingLevel + '>';
+          break;
+        case "ruledHead":
+          var headingLevel = obj.children[1].text().charAt(0) === '=' ? 2 : 1;
+          html += '<h' + headingLevel + '>';
+          html += recurse(obj.children[0]);
+          html += '</h' + headingLevel + '>';
+          break;
+        case "textBlock":
+          _.each(obj.children, function (c) {
+            html += recurse(c);
+          });
+          break;
+        case "fencedBlock":
+          var content = obj.children[0].text().slice(3);
+          if (! obj.children[1])
+            content = content.slice(0, -3);
+          var lines = content.split('\n');
+          var fenceType = lines.shift();
+          lines = _.map(lines, function (line) {
+            for(var i = 0; i < quoteLevel; i++)
+              line = line.match(/^(?:\s*>)?(.*)$/)[1];
+            return line;
+          });
+          if (lines.length) {
+            // strip whitespace so that first line is not indented
+            var indent = lines[0].match(/^\s*/)[0].length;
+            if (indent) {
+              lines = _.map(lines, function (line) {
+                var thisIndent = line.match(/^\s*/)[0].length;
+                return line.substring(Math.min(indent, thisIndent));
+              });
+            }
+          }
+          html += "<code><pre>";
+          html += Handlebars._escape(lines.join('\n'));
+          html += "</pre></code>";
+          break;
+        }
+        return html;
+      };
+      var tree = Rockdown.parse(input);
+      var html = '<div class="htmlpreview">' + toHtml(tree) + '</div>';
+      return new Handlebars.SafeString(html);
+
     } else return ''; // unknown output tab?
   };
 
@@ -209,7 +330,8 @@ if (Meteor.is_client) {
     {name: "JS Lex", value: "jslex"},
     {name: "JS Parse", value: "jsparse"},
     {name: "Rockdown Lex", value: "rockdownlex"},
-    {name: "Rockdown Parse", value: "rockdownparse"}
+    {name: "Rockdown Parse", value: "rockdownparse"},
+    {name: "Rockdown Preview", value: "rockdownpreview"}
  ];
 
   Template.page.is_outputtype_selected = function (which) {

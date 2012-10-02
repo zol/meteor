@@ -101,7 +101,7 @@ Rockdown._regexes = function (regexMap) {
 }({
   whitespace: /[^\S\n]+/,
   blockquote: />/,
-  bullet: /[*+-](?!\S)/,
+  bullet: /\*(?!\S)|-(?!-)|\+(?!\+)/,
   tagLine: /<[^>]*>(?=[^\S\n]*$)/m, // tag can span over multiple lines
   singleRule: /---([^\S\n]*-)*(?=[^\S\n]*$)/m,
   doubleRule: /===([^\S\n]*=)*(?=[^\S\n]*$)/m,
@@ -126,7 +126,7 @@ Rockdown._regexes = function (regexMap) {
   // inlineSpecial.
   // XXX make this less fragile
   boringContent:
-    /([^\*`&<\s_]+|[^\S\n]+(?!---)(?=\S)|&(?![#0-9a-z]+;)|<(?![a-z])(?!\/[a-z])|_(?!_))+/i,
+    /([^\*`&<\s_-]+|-(?!--)|[^\S\n]+(?!---)(?=\S)|&(?![#0-9a-z]+;)|<(?![a-z])(?!\/[a-z])|_(?!_))+/i,
   // tag can span over multiple lines
   inlineSpecial: /\*|__|`|&[#0-9a-z]+;|<\/?[a-z][^`>]*>?|[^\S\n]*---[^\S\n]*/mi
 });
@@ -224,7 +224,7 @@ Rockdown.parse = function (input) {
   //   textBlock [for textBlock node and any span node]
   //   quoteLevel [for textBlock node]
   //   compact [for list node]
-  //   column [for listItem node]
+  //   column [for listItem and listItemCompact nodes]
   // }
   var containerStack = [{node: new Rockdown.Node('document', [])}];
   var topContainerName = function () {
@@ -255,12 +255,14 @@ Rockdown.parse = function (input) {
     return new Error("Rockdown parse error: Unexpected " + found);
   };
 
-  // reads a new textBlock and pushes it on the container stack
   var openTextBlock = function (quoteLevel) {
     var textBlock = {node: new Rockdown.Node('textBlock', []),
                      quoteLevel: (quoteLevel || 0)};
     textBlock.textBlock = textBlock;
     pushContainer(textBlock);
+  };
+  var readTextBlock = function () {
+    var textBlock = containerStack[containerStack.length - 1].textBlock;
     while (newToken.isContent()) {
       if (newToken.type() === "INLINESPECIAL") {
         var text = newToken.text();
@@ -309,6 +311,7 @@ Rockdown.parse = function (input) {
     }
   };
   var closeTextBlock = function () {
+
     while (containerStack[containerStack.length - 1].textBlock) {
       var container = containerStack.pop();
       var type = container.node.name;
@@ -363,9 +366,7 @@ Rockdown.parse = function (input) {
         // this line is a continuation
         if (prevNewlineToken)
           addElement(prevNewlineToken);
-        addElement(takeToken());
-        while (newToken.isContent())
-          addElement(takeToken());
+        readTextBlock();
         // assume rest of line is trailing whitespace, eat it
         while (newToken.type() === "WHITESPACE")
           takeToken();
@@ -401,13 +402,18 @@ Rockdown.parse = function (input) {
         }
       } else if (containerType === "list") {
         if (container.compact && isEndOfLine) {
+          // detect not-actually-compact list that has a blank line
+          // as the second element of its first item
           if (container.node.children.length === 1 &&
-              container.node.children[0].children.length <= 1)
+              container.node.children[0].children.length <= 1) {
             container.compact = false;
-          else
+            container.node.children[0].name = 'listItem';
+          } else {
             break;
+          }
         }
-      } else if (containerType === "listItem") {
+      } else if (containerType === "listItem" ||
+                 containerType === "listItemCompact") {
         var listItemColumn = container.column;
         var whitespaceLength = 0;
         // amount of whitespace since last blockquote
@@ -437,20 +443,20 @@ Rockdown.parse = function (input) {
     // starters that weren't matched open new containers
     for(var i = matchedStarters, N = starters.length; i < N; i++) {
       if (starters[i].type() === "BLOCKQUOTE") {
-        var blockquoteToken = starters[i];
         if (topContainerName() === "list")
           containerStack.pop();
-        pushContainer({node: new Rockdown.Node('quotedBlock',
-                                               [blockquoteToken])});
+        pushContainer({node: new Rockdown.Node('quotedBlock', [])});
       } else if (starters[i].type() === "BULLET") {
-        var bulletToken = starters[i];
         if (topContainerName() !== "list")
           pushContainer({node: new Rockdown.Node('list', []),
                          compact: ! lineIsBlank});
+        var isCompact = containerStack[containerStack.length - 1].compact;
         var column = 0;
         for(var j = i-1; j >= 0 && starters[j].type() !== "BLOCKQUOTE"; j--)
           column += starters[j].text().length;
-        pushContainer({node: new Rockdown.Node('listItem', [bulletToken]),
+        pushContainer({node: new Rockdown.Node(isCompact ?
+                                               'listItemCompact' :
+                                               'listItem', []),
                        column: column});
       }
     }
@@ -470,6 +476,7 @@ Rockdown.parse = function (input) {
         if (starters[i].type() === "BLOCKQUOTE")
           quoteLevel++;
       openTextBlock(quoteLevel);
+      readTextBlock();
     } else if (newToken.type() === "FENCEDBLOCK") {
       var fencedBlockToken = takeToken();
       var fencedBlockNode = new Rockdown.Node("fencedBlock",
@@ -491,6 +498,7 @@ Rockdown.parse = function (input) {
       if (newToken.isContent()) {
         // no quoteLevel necessary, as this won't be a multi-line textBlock
         openTextBlock();
+        readTextBlock();
         closeTextBlock();
       }
       containerStack.pop(); // hashHead

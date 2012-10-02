@@ -189,3 +189,38 @@ html, body { height: 100%; }
   border-bottom: 0;
 }
 
+.htmlpreview {
+  font-family: sans-serif;
+  font-size: 16px;
+  margin: 8px;
+  line-height: 1.2;
+}
+
+.htmlpreview p {
+  margin: 1em 0;
+}
+
+.htmlpreview blockquote {
+  margin-left: 2em;
+  padding-left: 1em;
+  border-left: 3px solid #ddd;
+}
+
+.htmlpreview ul {
+  list-style: disc outside none;
+  margin-left: 2em;
+  margin-bottom: 1em;
+}
+
+.htmlpreview h1,
+.htmlpreview h2,
+.htmlpreview h3,
+.htmlpreview h4,
+.htmlpreview h5,
+.htmlpreview h6 {
+  margin: 0.5em 0;
+}
+
+.htmlpreview hr {
+  margin-bottom: 1em;
+}
