@@ -95,28 +95,33 @@ Rockdown._regexes = function (regexMap) {
       regexMap[k] = new StickyRegex(regexMap[k]);
   return regexMap;
 }({
-  // fenceBlockquote: /\s*>/,
-  // fenceEnd: /\s*```/,
-  // rest: /.*/,
-  nonEmptyRest: /[^\n]+/,
   whitespace: /[^\S\n]+/,
   blockquote: />/,
   bullet: /[*+-](?!\S)/,
   tagLine: /<[^>]*>(?=[^\S\n]*$)/,
   singleRule: /---([^\S\n]*-)*(?=[^\S\n]*$)/,
   doubleRule: /===([^\S\n]*=)*(?=[^\S\n]*$)/,
-  // fenceStart: /```/,
-  // hashHead: /#+/,
-  newline: /\n/
-
+  fence: /```/,
+  // A complete fence; includes rest of first line, then zero or more
+  // complete lines, reluctantly, stopping at either a line starting
+  // with some blockquotes and a fence or the end of the input.
+  //
+  // We are careful to allow the input to end at any time; a partial
+  // fence can be considered an error later, or perhaps a warning.
+  // A line starting with a fence always starts a fencedBlock.
+  fencedBlock: /```[^\n]*(\n|$)([^\n]*\n)*?(([^\S\n]+|>)*```|[^\n]*$)/,
+  hashHead: /#+/,
+  newline: /\n/,
+  // match longest possible string of one or more non-newline characters
+  // ending with non-whitespace.
+  restNoTrailingWhitespace: /[^\n]*\S/,
+  eof: /$/
 });
 
 Rockdown.Lexer = function (input) {
   this.input = input;
   this.pos = 0;
-  this.fenceQuoteLevel = 0;
-  this.lineQuoteLevel = 0;
-  this.mode = "LINESTART";
+  this.mode = "[[LINESTART]]";
 };
 
 Rockdown.Lexer.prototype.next = function () {
@@ -130,23 +135,64 @@ Rockdown.Lexer.prototype.next = function () {
     self.pos += result.length;
     return new Rockdown.Token(pos, result, type);
   };
+  var lookAhead = function (stickyRegex) {
+    return stickyRegex.matchAt(self.input, self.pos) !== null;
+  };
   var r = Rockdown._regexes;
 
   var tok;
-  if (self.mode === "LINESTART") {
+  if ((tok = token('EOF', r.eof)))
+    return tok;
+
+  if (self.mode === "[[LINESTART]]") {
     if ((tok = (token('WHITESPACE', r.whitespace) ||
                 token('BLOCKQUOTE', r.blockquote) ||
-                token('NEWLINE', r.newline))))
+                token('BULLET', r.bullet))))
       return tok;
-    self.mode = "OPENERS";
-  }
-  if (self.mode === "OPENERS") {
-    if ((tok = (token('WHITESPACE', r.whitespace) ||
-                token('BLOCKQUOTE', r.blockquote) ||
-                token('NEWLINE', r.newline))))
+    if ((tok = (token('TAGLINE', r.tagLine) ||
+                token('SINGLERULE', r.singleRule) ||
+                token('DOUBLERULE', r.doubleRule)))) {
+      self.mode = "[[TRAILING]]";
       return tok;
-    self.mode = "XXX";
+    }
+    if ((tok = token('FENCEDBLOCK', r.fencedBlock))) {
+      // token includes the entire fenced contents and the end fence.
+      // The contents will be parsed later to interpret the first
+      // line specially, strip blockquotes, and strip the first line's
+      // indentation.
+      // There may be trailing non-whitespace after the end fence
+      // that should get mopped up by the trailing mode.
+      self.mode = "[[TRAILING]]";
+      return tok;
+    }
+    if ((tok = token('HASHHEAD', r.hashHead))) {
+      self.mode = "[[CONTENT]]";
+      return tok;
+    }
+    self.mode = "[[CONTENT]]";
+    // FALL THROUGH...
   }
+  if (self.mode === "[[CONTENT]]") {
+    tok = token('CONTENT', r.restNoTrailingWhitespace);
+    self.mode = "[[TRAILING]]";
+    if (tok)
+      return tok;
+    // FALL THROUGH...
+  }
+  if (self.mode === "[[TRAILING]]") {
+    if ((tok = (token('TRAILING', r.restNoTrailingWhitespace) ||
+                token('WHITESPACE', r.whitespace))))
+      return tok;
+
+    if ((tok = token('NEWLINE', r.newline))) {
+      self.mode = "[[LINESTART]]";
+      return tok;
+    }
+    // we've already checked for EOF, \n, \S, and [^\S\n], which is
+    // all possible characters that could come next.
+    throw new Error("can't get here");
+  }
+  throw new Error("Unknown mode: " + self.mode);
 };
 
 Rockdown.parseLines = function (input) {

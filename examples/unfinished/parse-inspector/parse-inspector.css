@@ -96,18 +96,18 @@ html, body { height: 100%; }
 
 .lex { border: 1px solid #333; cursor: pointer; }
 
-.lex_keyword { background: #0f0; }
-.lex_identifier { background: #ff0; }
-.lex_punctuation { background: #0ff; }
+.lex_keyword, .rdlex_hashhead { background: #0f0; }
+.lex_identifier, .rdlex_tagline, .rdlex_singlerule, .rdlex_doublerule { background: #ff0; }
+.lex_punctuation, .rdlex_blockquote, .rdlex_bullet { background: #0ff; }
 .lex_error { background: #f00; }
 .lex_whitespace, .lex_newline, .lex_eof { background: #fcc; }
-.lex_comment { background: #ccc; }
+.lex_comment, .rdlex_content { background: #ccc; }
 
 .lex_regex { background: #f0f; }
-.lex_null { background: #dac; }
+.lex_null, .rdlex_trailing { background: #dac; }
 .lex_boolean { background: #faf; }
 .lex_number { background: #c3f; }
-.lex_string { background: #fc3; }
+.lex_string, .rdlex_fencedblock { background: #fc3; }
 
 .parseerror {
   background: #f99;

@@ -12,6 +12,41 @@ if (Meteor.is_client) {
     return Session.get("input") || '';
   };
 
+  // lexer must have lexer.next(), which must return a token having
+  // text(), type(), startPos() and endPos().  The types NEWLINE, EOF,
+  // and ERROR are treated specially.  The lexer's output must
+  // terminate with EOF or ERROR.
+  // CSS classes on the token are "lex lex_$type $lexClassPrefix_$type"
+  // where $type is the lowercase token type() and $lexClassPrefix
+  // is optional.
+  var lexToHtml = function (lexer, lexClassPrefix) {
+    var html = "";
+    var L;
+    do {
+      L = lexer.next();
+      var content;
+      if (L.type() === "NEWLINE") {
+        content = '&nbsp;<br>';
+      } else if (L.type() === "EOF") {
+        content = Handlebars._escape("<EOF>");
+      } else {
+        content = Handlebars._escape(L.text() || ' ');
+        content = content.replace(/(?!.)\s/g, '<br>'); // for multiline comments
+        content = content.replace(/\s/g, '&nbsp;');
+      }
+      var classExtras = "";
+      if (lexClassPrefix)
+        classExtras = " " + lexClassPrefix + '_' + L.type().toLowerCase();
+      html += Spark.setDataContext(
+        L,
+        '<span class="lex lex_' + L.type().toLowerCase() +
+          classExtras + '" ' + 'title="' +
+          Handlebars._escape(L.type()) + '">' + content + '</span>');
+    } while (L.type() !== "ERROR" && L.type() !== "EOF");
+    return html;
+  };
+
+
   // Nodes must be instanceof nodeConstr and have name/children.
   // Leaves must have text(), startPos() and endPos(), and may have
   // type().
@@ -80,26 +115,7 @@ if (Meteor.is_client) {
       // LEXER
 
       var lexer = new JSLexer(input);
-      var html = "";
-      var L;
-      do {
-        L = lexer.next();
-        var content;
-        if (L.type() === "NEWLINE") {
-          content = '&nbsp;<br>';
-        } else if (L.type() === "EOF") {
-          content = Handlebars._escape("<EOF>");
-        } else {
-          content = Handlebars._escape(L.text() || ' ');
-          content = content.replace(/(?!.)\s/g, '<br>'); // for multiline comments
-          content = content.replace(/\s/g, '&nbsp;');
-        }
-        html += Spark.setDataContext(
-          L,
-          '<span class="lex lex_' + L.type().toLowerCase() + '" ' +
-            'title="' + Handlebars._escape(L.type()) + '">' +
-            content + '</span>');
-      } while (! L.isError() && ! L.isEOF());
+      var html = lexToHtml(lexer);
       return new Handlebars.SafeString(html);
 
     } else if (outputType === "jsparse") {
@@ -134,13 +150,18 @@ if (Meteor.is_client) {
       }
 
       return new Handlebars.SafeString(html);
-    } else if (outputType === "rockdownparse") {
-      var tree = Rockdown.parseLines(input);
+    } else if (outputType === "rockdownlex") {
+
+      var lexer = new Rockdown.Lexer(input);
+      var html = lexToHtml(lexer, 'rdlex');
+      return new Handlebars.SafeString(html);
+
+      /*var tree = Rockdown.parseLines(input);
       var html = treeToHtmlBoxes(
         tree, Rockdown.Node, input.length, function (name) {
           return /line/i.test(name);
         });
-      return new Handlebars.SafeString(html);
+      return new Handlebars.SafeString(html);*/
 
     } else return ''; // unknown output tab?
   };
@@ -182,7 +203,7 @@ if (Meteor.is_client) {
   Template.page.outputTypes = [
     {name: "JS Lex", value: "jslex"},
     {name: "JS Parse", value: "jsparse"},
-    {name: "Rockdown Parse", value: "rockdownparse"}
+    {name: "Rockdown Lex", value: "rockdownlex"}
  ];
 
   Template.page.is_outputtype_selected = function (which) {
