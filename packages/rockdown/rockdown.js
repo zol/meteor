@@ -256,7 +256,7 @@ Rockdown.parse = function (input) {
   };
 
   // reads a new textBlock and pushes it on the container stack
-  var readTextBlock = function (quoteLevel) {
+  var openTextBlock = function (quoteLevel) {
     var textBlock = {node: new Rockdown.Node('textBlock', []),
                      quoteLevel: (quoteLevel || 0)};
     textBlock.textBlock = textBlock;
@@ -269,8 +269,13 @@ Rockdown.parse = function (input) {
           if (text === '`')
             containerStack.pop();
         } else {
-          if (text.charAt(0) === '&' || text.charAt(0) === '<') {
+          if (text.charAt(0) === '&') {
             addElement(new Rockdown.Node('html', [takeToken()]));
+          } else if (text.charAt(0) === '<') {
+            var htmlNode = new Rockdown.Node('html', [takeToken()]);
+            if (text.indexOf('>') < 0)
+              htmlNode.children.push(new Rockdown.Node('>', []));
+            addElement(htmlNode);
           } else if (/^\s*---/.test(text)) {
             addElement(new Rockdown.Node('emdash', [takeToken()]));
           } else if (text === '`') {
@@ -301,6 +306,19 @@ Rockdown.parse = function (input) {
       } else {
         addElement(takeToken());
       }
+    }
+  };
+  var closeTextBlock = function () {
+    while (containerStack[containerStack.length - 1].textBlock) {
+      var container = containerStack.pop();
+      var type = container.node.name;
+      var children = container.node.children;
+      if (type === "codeSpan")
+        children.push(new Rockdown.Node('`', []));
+      else if (type === "emSpan")
+        children.push(new Rockdown.Node('*', []));
+      else if (type === "strongSpan")
+        children.push(new Rockdown.Node('__', []));
     }
   };
 
@@ -353,9 +371,7 @@ Rockdown.parse = function (input) {
           takeToken();
         continue nextLine;
       } else {
-        // close the text block
-        while (containerStack[containerStack.length - 1].textBlock)
-          containerStack.pop();
+        closeTextBlock();
       }
     }
 
@@ -378,10 +394,11 @@ Rockdown.parse = function (input) {
       var containerType = containerStack[i].node.name;
       if (containerType === "quotedBlock") {
         // must be a BLOCKQUOTE
-        if (j < M && starters[j].type() === "BLOCKQUOTE")
+        if (j < M && starters[j].type() === "BLOCKQUOTE") {
           j++;
-        else
+        } else {
           break; // no match
+        }
       } else if (containerType === "list") {
         if (container.compact && isEndOfLine) {
           if (container.node.children.length === 1 &&
@@ -420,17 +437,20 @@ Rockdown.parse = function (input) {
     // starters that weren't matched open new containers
     for(var i = matchedStarters, N = starters.length; i < N; i++) {
       if (starters[i].type() === "BLOCKQUOTE") {
+        var blockquoteToken = starters[i];
         if (topContainerName() === "list")
           containerStack.pop();
-        pushContainer({node: new Rockdown.Node('quotedBlock', [])});
+        pushContainer({node: new Rockdown.Node('quotedBlock',
+                                               [blockquoteToken])});
       } else if (starters[i].type() === "BULLET") {
+        var bulletToken = starters[i];
         if (topContainerName() !== "list")
           pushContainer({node: new Rockdown.Node('list', []),
                          compact: ! lineIsBlank});
         var column = 0;
         for(var j = i-1; j >= 0 && starters[j].type() !== "BLOCKQUOTE"; j--)
           column += starters[j].text().length;
-        pushContainer({node: new Rockdown.Node('listItem', []),
+        pushContainer({node: new Rockdown.Node('listItem', [bulletToken]),
                        column: column});
       }
     }
@@ -449,12 +469,20 @@ Rockdown.parse = function (input) {
       for(var i = 0, N = starters.length; i < N; i++)
         if (starters[i].type() === "BLOCKQUOTE")
           quoteLevel++;
-      readTextBlock(quoteLevel);
+      openTextBlock(quoteLevel);
     } else if (newToken.type() === "FENCEDBLOCK") {
       var fencedBlockToken = takeToken();
+      var fencedBlockNode = new Rockdown.Node("fencedBlock",
+                                              [fencedBlockToken]);
+      var fencedLines = fencedBlockToken.text().split('\n');
+      var isComplete =
+            (fencedLines.length >= 2 &&
+             /^[\s>]*```$/.test(fencedLines[fencedLines.length - 1]));
+      if (! isComplete)
+        fencedBlockNode.children.push(new Rockdown.Node('```', []));
       if (newToken.type() === "TRAILING")
         takeToken(); // trailing content
-      addElement(new Rockdown.Node("fencedBlock", [fencedBlockToken]));
+      addElement(fencedBlockNode);
     } else if (newToken.type() === "HASHHEAD") {
       var hashHead = new Rockdown.Node('hashHead', [takeToken()]);
       pushContainer({node: hashHead});
@@ -462,9 +490,8 @@ Rockdown.parse = function (input) {
         takeToken();
       if (newToken.isContent()) {
         // no quoteLevel necessary, as this won't be a multi-line textBlock
-        readTextBlock();
-        while (containerStack[containerStack.length - 1].textBlock)
-          containerStack.pop();
+        openTextBlock();
+        closeTextBlock();
       }
       containerStack.pop(); // hashHead
     } else if (newToken.type() === "SINGLERULE" ||
@@ -492,6 +519,8 @@ Rockdown.parse = function (input) {
     while (newToken.type() === "WHITESPACE")
       takeToken();
   }
+
+  closeTextBlock();
 
   return containerStack[0].node;
 };
