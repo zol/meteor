@@ -98,9 +98,9 @@ Rockdown._regexes = function (regexMap) {
   whitespace: /[^\S\n]+/,
   blockquote: />/,
   bullet: /[*+-](?!\S)/,
-  tagLine: /<[^>]*>(?=[^\S\n]*$)/,
-  singleRule: /---([^\S\n]*-)*(?=[^\S\n]*$)/,
-  doubleRule: /===([^\S\n]*=)*(?=[^\S\n]*$)/,
+  tagLine: /<[^>]*>(?=[^\S\n]*$)/m,
+  singleRule: /---([^\S\n]*-)*(?=[^\S\n]*$)/m,
+  doubleRule: /===([^\S\n]*=)*(?=[^\S\n]*$)/m,
   fence: /```/,
   // A complete fence; includes rest of first line, then zero or more
   // complete lines, reluctantly, stopping at either a line starting
@@ -115,7 +115,8 @@ Rockdown._regexes = function (regexMap) {
   // match longest possible string of one or more non-newline characters
   // ending with non-whitespace.
   restNoTrailingWhitespace: /[^\n]*\S/,
-  eof: /$/
+  eof: /$/,
+  fenceFirstLine: /[^\n]*/
 });
 
 Rockdown.Lexer = function (input) {
@@ -161,8 +162,8 @@ Rockdown.Lexer.prototype.next = function () {
       // line specially, strip blockquotes, and strip the first line's
       // indentation.
       // There may be trailing non-whitespace after the end fence
-      // that should get mopped up by the trailing mode.
-      self.mode = "[[TRAILING]]";
+      // that should get mopped up by content mode.
+      self.mode = "[[CONTENT]]";
       return tok;
     }
     if ((tok = token('HASHHEAD', r.hashHead))) {
@@ -288,7 +289,6 @@ Rockdown.parse = function (input) {
     var j = 0; // index into starters
     var M = starters.length;
     for(var i = 0, N = containerStack.length; i < N; i++) {
-      console.log(i, containerStack[i].node.name);
       // position j at next non-WHITESPACE starter, or M if none
       while (j < M && starters[j].type() === "WHITESPACE")
           j++;
@@ -305,8 +305,11 @@ Rockdown.parse = function (input) {
           break; // no match
       } else if (containerType === "list") {
         if (container.compact && isEndOfLine) {
-          console.log("ZZZ");
-          break; // blank line terminates compact list
+          if (container.node.children.length === 1 &&
+              container.node.children[0].children.length <= 1)
+            container.compact = false;
+          else
+            break;
         }
       } else if (containerType === "listItem") {
         var listItemColumn = container.column;
@@ -323,27 +326,17 @@ Rockdown.parse = function (input) {
     var matchedStarters = j;
 
     // close reminaing containers
-    while (containerStack.length > openContainers) {
-      var closedNode = containerStack.pop().node;
-      // detect compact list
-      if (closedNode.name === "listItem") {
-        var listItem = closedNode;
-        var listContainer = containerStack[containerStack.length - 1];
-        if (listContainer.node.children.length === 1) {
-          if (listItem.children[0] instanceof Rockdown.Node &&
-              listItem.children[0].name === "textBlock" &&
-              ! (listItem.children[1] instanceof Rockdown.Node &&
-                 listItem.children[1].name === "blankLine"))
-            listContainer.compact = true;
-        }
-      }
-    }
+    while (containerStack.length > openContainers)
+      containerStack.pop();
 
     // get the rest of the WHITESPACE, BLOCKQUOTE, and BULLET tokens
     while (newToken.type() === "WHITESPACE" ||
            newToken.type() === "BLOCKQUOTE" ||
            newToken.type() === "BULLET")
       starters.push(takeToken());
+
+    // is line blank except for leading blockquotes and bullets
+    var lineIsBlank = (newToken.type() === "NEWLINE" || newToken.type() === "EOF");
 
     // starters that weren't matched open new containers
     for(var i = matchedStarters, N = starters.length; i < N; i++) {
@@ -354,7 +347,7 @@ Rockdown.parse = function (input) {
       } else if (starters[i].type() === "BULLET") {
         if (topContainerName() !== "list")
           pushContainer({node: new Rockdown.Node('list', []),
-                         compact: false});
+                         compact: ! lineIsBlank});
         var column = 0;
         for(var j = i-1; j >= 0 && starters[j].type() !== "BLOCKQUOTE"; j--)
           column += starters[j].text().length;
@@ -366,8 +359,7 @@ Rockdown.parse = function (input) {
     if (topContainerName() === "list")
       containerStack.pop();
 
-    if (newToken.type() === "NEWLINE" || newToken.type() === "EOF") {
-      // blank line
+    if (lineIsBlank) {
       addElement(new Rockdown.Node('blankLine', []));
       continue nextLine;
     }
@@ -381,19 +373,33 @@ Rockdown.parse = function (input) {
       pushContainer({node: new Rockdown.Node('textBlock', [takeToken()]),
                      quoteLevel: quoteLevel});
     } else if (newToken.type() === "FENCEDBLOCK") {
-      var fencedBlock = new Rockdown.Node('fencedBlock', [takeToken()]);
-      addElement(fencedBlock);
-      // include non-whitespace trailing text in the parse tree
-      while (newToken.type() === "TRAILING")
-        fencedBlock.children.push(takeToken());
+      var fencedBlockToken = takeToken();
+      if (newToken.type() === "CONTENT")
+        takeToken(); // trailing content
+      addElement(new Rockdown.Node("fencedBlock", [fencedBlockToken]));
     } else if (newToken.type() === "HASHHEAD") {
       var hashHead = new Rockdown.Node('hashHead', [takeToken()]);
       addElement(hashHead);
       if (newToken.type() === "CONTENT")
         hashHead.children.push(takeToken());
-    } else {
-      // TAGLINE, SINGLERULE, DOUBLERULE
-      var node = new Rockdown.Node('specialLine', [takeToken()]);
+    } else if (newToken.type() === "SINGLERULE" ||
+               newToken.type() === "DOUBLERULE") {
+      var topNode = containerStack[containerStack.length - 1].node;
+      var prevSibs = topNode.children;
+      if (prevSibs.length &&
+          prevSibs[prevSibs.length - 1] instanceof Rockdown.Node &&
+          prevSibs[prevSibs.length - 1].name === "textBlock") {
+        // combine rule with textBlock to make ruledHead
+        var textBlock = prevSibs.pop();
+        var ruledHead = new Rockdown.Node('ruledHead', textBlock.children);
+        ruledHead.children.push(takeToken());
+        addElement(ruledHead);
+      } else {
+        var node = new Rockdown.Node('rule', [takeToken()]);
+        addElement(node);
+      }
+    } else if (newToken.type() === "TAGLINE") {
+      var node = new Rockdown.Node('singleTag', [takeToken()]);
       addElement(node);
     }
 
