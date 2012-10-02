@@ -88,6 +88,10 @@ Rockdown.Token.prototype.endPos = function () {
   return this._pos + this._text.length;
 };
 
+Rockdown.Token.prototype.isContent = function () {
+  return this._type === "CONTENT" || this._type === "INLINESPECIAL";
+};
+
 Rockdown._regexes = function (regexMap) {
   // replace all regex with StickyRegexes
   for (var k in regexMap)
@@ -98,7 +102,7 @@ Rockdown._regexes = function (regexMap) {
   whitespace: /[^\S\n]+/,
   blockquote: />/,
   bullet: /[*+-](?!\S)/,
-  tagLine: /<[^>]*>(?=[^\S\n]*$)/m,
+  tagLine: /<[^>]*>(?=[^\S\n]*$)/m, // tag can span over multiple lines
   singleRule: /---([^\S\n]*-)*(?=[^\S\n]*$)/m,
   doubleRule: /===([^\S\n]*=)*(?=[^\S\n]*$)/m,
   fence: /```/,
@@ -116,7 +120,15 @@ Rockdown._regexes = function (regexMap) {
   // ending with non-whitespace.
   restNoTrailingWhitespace: /[^\n]*\S/,
   eof: /$/,
-  fenceFirstLine: /[^\n]*/
+  fenceFirstLine: /[^\n]*/,
+  // it's important here that inlineSpecials can't contain backticks,
+  // and that the total negative look-ahead in boringContent matches
+  // inlineSpecial.
+  // XXX make this less fragile
+  boringContent:
+    /([^\*`&<\s_]+|[^\S\n]+(?!---)(?=\S)|&(?![#0-9a-z]+;)|<(?![a-z])(?!\/[a-z])|_(?!_))+/i,
+  // tag can span over multiple lines
+  inlineSpecial: /\*|__|`|&[#0-9a-z]+;|<\/?[a-z][^`>]*>?|[^\S\n]*---[^\S\n]*/mi
 });
 
 Rockdown.Lexer = function (input) {
@@ -136,8 +148,8 @@ Rockdown.Lexer.prototype.next = function () {
     self.pos += result.length;
     return new Rockdown.Token(pos, result, type);
   };
-  var lookAhead = function (stickyRegex) {
-    return stickyRegex.matchAt(self.input, self.pos) !== null;
+  var peek = function (stickyRegex) {
+    return stickyRegex.matchAt(self.input, self.pos);
   };
   var r = Rockdown._regexes;
 
@@ -167,16 +179,23 @@ Rockdown.Lexer.prototype.next = function () {
       return tok;
     }
     if ((tok = token('HASHHEAD', r.hashHead))) {
-      self.mode = "[[CONTENT]]";
+      self.mode = "[[PRECONTENT]]";
       return tok;
     }
     self.mode = "[[CONTENT]]";
     // FALL THROUGH...
   }
-  if (self.mode === "[[CONTENT]]") {
-    tok = token('CONTENT', r.restNoTrailingWhitespace);
-    if (tok)
+  if (self.mode === "[[PRECONTENT]]") {
+    if ((tok = token('WHITESPACE', r.whitespace)))
       return tok;
+    self.mode = "[[CONTENT]]";
+    // FALL THROUGH...
+  }
+  if (self.mode === "[[CONTENT]]") {
+    if ((tok = (token('CONTENT', r.boringContent) ||
+                token('INLINESPECIAL', r.inlineSpecial))))
+      return tok;
+
     self.mode = "[[TRAILING]]";
     // FALL THROUGH...
   }
@@ -202,6 +221,7 @@ Rockdown.parse = function (input) {
   // containers on the container stack are objects with properties:
   // {
   //   node
+  //   textBlock [for textBlock node and any span node]
   //   quoteLevel [for textBlock node]
   //   compact [for list node]
   //   column [for listItem node]
@@ -235,21 +255,76 @@ Rockdown.parse = function (input) {
     return new Error("Rockdown parse error: Unexpected " + found);
   };
 
+  // reads a new textBlock and pushes it on the container stack
+  var readTextBlock = function (quoteLevel) {
+    var textBlock = {node: new Rockdown.Node('textBlock', []),
+                     quoteLevel: (quoteLevel || 0)};
+    textBlock.textBlock = textBlock;
+    pushContainer(textBlock);
+    while (newToken.isContent()) {
+      if (newToken.type() === "INLINESPECIAL") {
+        var text = newToken.text();
+        if (topContainerName() === 'codeSpan') {
+          addElement(takeToken());
+          if (text === '`')
+            containerStack.pop();
+        } else {
+          if (text.charAt(0) === '&' || text.charAt(0) === '<') {
+            addElement(new Rockdown.Node('html', [takeToken()]));
+          } else if (/^\s*---/.test(text)) {
+            addElement(new Rockdown.Node('emdash', [takeToken()]));
+          } else if (text === '`') {
+            pushContainer({node: new Rockdown.Node('codeSpan', [takeToken()]),
+                           textBlock: textBlock});
+          } else if (text === '*') {
+            if (topContainerName() === 'emSpan') {
+              addElement(takeToken());
+              containerStack.pop();
+            } else {
+              pushContainer({node: new Rockdown.Node('emSpan', [takeToken()]),
+                             textBlock: textBlock});
+            }
+          } else if (text === '__') {
+            if (topContainerName() === 'strongSpan') {
+              addElement(takeToken());
+              containerStack.pop();
+            } else {
+              pushContainer(
+                {node: new Rockdown.Node('strongSpan', [takeToken()]),
+                 textBlock: textBlock});
+            }
+          } else {
+            // can't get here
+            throw new Error("Unexpected token: " + text);
+          }
+        }
+      } else {
+        addElement(takeToken());
+      }
+    }
+  };
+
+  var count = 0;
   nextLine:
   while (newToken.type() !== "EOF") {
+    if (++count > 1000) debugger;
+    if (++count > 2000) break;
 
     var prevNewlineToken = null;
-    if (oldToken) {
-      if (newToken.type() !== "NEWLINE")
-        // Extra tokens on previous line
-        throw getParseError();
+    if (oldToken && newToken.type() !== "NEWLINE")
+      // Extra tokens on previous line
+      throw getParseError();
+    if (newToken.type() === "NEWLINE") {
+      if (! oldToken)
+        addElement(new Rockdown.Node('blankLine', []));
       prevNewlineToken = takeToken();
     }
 
     var starters = [];
 
-    if (topContainerName() === 'textBlock') {
-      var textBlock = containerStack[containerStack.length - 1];
+    if (containerStack[containerStack.length - 1].textBlock) {
+      // in a textBlock (possibly in a span in a textBlock)
+      var textBlock = containerStack[containerStack.length - 1].textBlock;
       var quoteLevel = textBlock.quoteLevel;
       // start taking whitespace and blockquotes, up to the
       // textBlock's quoteLevel, to see if this is a continuation
@@ -266,19 +341,21 @@ Rockdown.parse = function (input) {
         starters.push(takeToken());
 
       // continue or close the textBlock
-      if (newToken.type() === "CONTENT") {
+      if (newToken.isContent()) {
         // this line is a continuation
         if (prevNewlineToken)
           addElement(prevNewlineToken);
         addElement(takeToken());
-        while (newToken.type() === "CONTENT")
+        while (newToken.isContent())
           addElement(takeToken());
         // assume rest of line is trailing whitespace, eat it
         while (newToken.type() === "WHITESPACE")
           takeToken();
         continue nextLine;
       } else {
-        containerStack.pop();
+        // close the text block
+        while (containerStack[containerStack.length - 1].textBlock)
+          containerStack.pop();
       }
     }
 
@@ -366,16 +443,13 @@ Rockdown.parse = function (input) {
       continue nextLine;
     }
 
-    if (newToken.type() === "CONTENT") {
+    if (newToken.isContent()) {
       // open textBlock
       var quoteLevel = 0;
       for(var i = 0, N = starters.length; i < N; i++)
         if (starters[i].type() === "BLOCKQUOTE")
           quoteLevel++;
-      pushContainer({node: new Rockdown.Node('textBlock', [takeToken()]),
-                     quoteLevel: quoteLevel});
-      while (newToken.type() === "CONTENT")
-        addElement(takeToken());
+      readTextBlock(quoteLevel);
     } else if (newToken.type() === "FENCEDBLOCK") {
       var fencedBlockToken = takeToken();
       if (newToken.type() === "TRAILING")
@@ -383,9 +457,16 @@ Rockdown.parse = function (input) {
       addElement(new Rockdown.Node("fencedBlock", [fencedBlockToken]));
     } else if (newToken.type() === "HASHHEAD") {
       var hashHead = new Rockdown.Node('hashHead', [takeToken()]);
-      addElement(hashHead);
-      while (newToken.type() === "CONTENT")
-        hashHead.children.push(takeToken());
+      pushContainer({node: hashHead});
+      while (newToken.type() === "WHITESPACE")
+        takeToken();
+      if (newToken.isContent()) {
+        // no quoteLevel necessary, as this won't be a multi-line textBlock
+        readTextBlock();
+        while (containerStack[containerStack.length - 1].textBlock)
+          containerStack.pop();
+      }
+      containerStack.pop(); // hashHead
     } else if (newToken.type() === "SINGLERULE" ||
                newToken.type() === "DOUBLERULE") {
       var topNode = containerStack[containerStack.length - 1].node;
@@ -395,8 +476,8 @@ Rockdown.parse = function (input) {
           prevSibs[prevSibs.length - 1].name === "textBlock") {
         // combine rule with textBlock to make ruledHead
         var textBlock = prevSibs.pop();
-        var ruledHead = new Rockdown.Node('ruledHead', textBlock.children);
-        ruledHead.children.push(takeToken());
+        var ruledHead = new Rockdown.Node('ruledHead',
+                                          [textBlock, takeToken()]);
         addElement(ruledHead);
       } else {
         var node = new Rockdown.Node('rule', [takeToken()]);

@@ -105,7 +105,7 @@ html, body { height: 100%; }
 
 .lex_regex, .rdlex_bullet { background: #f0f; }
 .lex_null, .rdlex_trailing { background: #dac; }
-.lex_boolean { background: #faf; }
+.lex_boolean, .rdlex_inlinespecial { background: #faf; }
 .lex_number { background: #c3f; }
 .lex_string, .rdlex_fencedblock { background: #fc3; }
 
