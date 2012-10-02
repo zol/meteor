@@ -162,8 +162,8 @@ Rockdown.Lexer.prototype.next = function () {
       // line specially, strip blockquotes, and strip the first line's
       // indentation.
       // There may be trailing non-whitespace after the end fence
-      // that should get mopped up by content mode.
-      self.mode = "[[CONTENT]]";
+      // that should get mopped up by the trailing mode.
+      self.mode = "[[TRAILING]]";
       return tok;
     }
     if ((tok = token('HASHHEAD', r.hashHead))) {
@@ -175,9 +175,9 @@ Rockdown.Lexer.prototype.next = function () {
   }
   if (self.mode === "[[CONTENT]]") {
     tok = token('CONTENT', r.restNoTrailingWhitespace);
-    self.mode = "[[TRAILING]]";
     if (tok)
       return tok;
+    self.mode = "[[TRAILING]]";
     // FALL THROUGH...
   }
   if (self.mode === "[[TRAILING]]") {
@@ -271,6 +271,8 @@ Rockdown.parse = function (input) {
         if (prevNewlineToken)
           addElement(prevNewlineToken);
         addElement(takeToken());
+        while (newToken.type() === "CONTENT")
+          addElement(takeToken());
         // assume rest of line is trailing whitespace, eat it
         while (newToken.type() === "WHITESPACE")
           takeToken();
@@ -372,15 +374,17 @@ Rockdown.parse = function (input) {
           quoteLevel++;
       pushContainer({node: new Rockdown.Node('textBlock', [takeToken()]),
                      quoteLevel: quoteLevel});
+      while (newToken.type() === "CONTENT")
+        addElement(takeToken());
     } else if (newToken.type() === "FENCEDBLOCK") {
       var fencedBlockToken = takeToken();
-      if (newToken.type() === "CONTENT")
+      if (newToken.type() === "TRAILING")
         takeToken(); // trailing content
       addElement(new Rockdown.Node("fencedBlock", [fencedBlockToken]));
     } else if (newToken.type() === "HASHHEAD") {
       var hashHead = new Rockdown.Node('hashHead', [takeToken()]);
       addElement(hashHead);
-      if (newToken.type() === "CONTENT")
+      while (newToken.type() === "CONTENT")
         hashHead.children.push(takeToken());
     } else if (newToken.type() === "SINGLERULE" ||
                newToken.type() === "DOUBLERULE") {
