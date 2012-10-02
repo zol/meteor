@@ -224,3 +224,10 @@ html, body { height: 100%; }
 .htmlpreview hr {
   margin-bottom: 1em;
 }
+
+.htmlpreview a {
+  text-decoration: none;
+  cursor: pointer;
+  color: black;
+  border-bottom: 1px dashed black;
+}

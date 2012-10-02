@@ -282,6 +282,12 @@ if (Meteor.is_client) {
           html += Handlebars._escape(lines.join('\n'));
           html += "</pre></code>";
           break;
+        case "atLink":
+          html += '<a href="#">';
+          html += obj.children[0].text().slice(1);
+          if (obj.children[1])
+            html += recurse(obj.children[1]);
+          html += '</a>';
         }
         return html;
       };

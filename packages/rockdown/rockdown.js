@@ -10,7 +10,7 @@ var StickyRegex = function (regex) {
   // force 'g', and use 'i' or 'm' if present
   var flags = ('g' + (regex.ignoreCase ? 'i' : '') +
                (regex.multiline ? 'm' : ''));
-  this._regex = new RegExp(regex.source, flags);
+  this.regex = new RegExp(regex.source, flags);
   // simulate "sticky" regular expression that only matches
   // at the current position.  We want /a/, for example, to test
   // whether the *next* character is an 'a', not any subsequent
@@ -18,14 +18,14 @@ var StickyRegex = function (regex) {
   // but we treat the [\s\S] (any character) case as failure.
   // We detect this case using paren groups 1 and 2.
   this._rSticky = new RegExp(
-    "((" + this._regex.source + ")|[\\S\\s])", flags);
+    "((" + this.regex.source + ")|[\\S\\s])", flags);
 };
 
 // Match the regex in string `source` starting a position
 // `pos`, if possible.  Returns a string of the match
 // (possibly empty) on success, and `null` on failure.
 StickyRegex.prototype.matchAt = function (source, pos) {
-  var r = this._regex;
+  var r = this.regex;
   var rSticky = this._rSticky;
   var result;
   if (pos === source.length) {
@@ -121,14 +121,10 @@ Rockdown._regexes = function (regexMap) {
   restNoTrailingWhitespace: /[^\n]*\S/,
   eof: /$/,
   fenceFirstLine: /[^\n]*/,
-  // it's important here that inlineSpecials can't contain backticks,
-  // and that the total negative look-ahead in boringContent matches
-  // inlineSpecial.
-  // XXX make this less fragile
-  boringContent:
-    /([^\*`&<\s_-]+|-(?!--)|[^\S\n]+(?!---)(?=\S)|&(?![#0-9a-z]+;)|<(?![a-z])(?!\/[a-z])|_(?!_))+/i,
-  // tag can span over multiple lines
-  inlineSpecial: /\*|__|`|&[#0-9a-z]+;|<\/?[a-z][^`>]*>?|[^\S\n]*---[^\S\n]*/mi
+  boringContent: /[^\*`&<\s_-]+/,
+  // important that specials can't contain '`'.
+  // the HTML tag special can span over multiple lines.
+  inlineSpecial: /\*|__|`|&[#0-9a-z]+;|<\/?[a-z][^`>]*>?|[^\S\n]*---[^\S\n]*|@((?=`)|[-a-zA-Z0-9_().,]*[-a-zA-Z0-9_()])/mi
 });
 
 Rockdown.Lexer = function (input) {
@@ -192,8 +188,19 @@ Rockdown.Lexer.prototype.next = function () {
     // FALL THROUGH...
   }
   if (self.mode === "[[CONTENT]]") {
-    if ((tok = (token('CONTENT', r.boringContent) ||
-                token('INLINESPECIAL', r.inlineSpecial))))
+    var lastPos = self.pos;
+    var tokenText = "";
+    while (peek(r.restNoTrailingWhitespace) &&
+           ! peek(r.inlineSpecial)) {
+      var boringContentMatch = r.boringContent.matchAt(self.input, self.pos);
+      var result = (boringContentMatch || self.input.charAt(self.pos));
+      tokenText += result;
+      self.pos += result.length;
+    }
+    if (self.pos > lastPos)
+      return new Rockdown.Token(lastPos, tokenText, "CONTENT");
+
+    if ((tok = token('INLINESPECIAL', r.inlineSpecial)))
       return tok;
 
     self.mode = "[[TRAILING]]";
@@ -268,8 +275,11 @@ Rockdown.parse = function (input) {
         var text = newToken.text();
         if (topContainerName() === 'codeSpan') {
           addElement(takeToken());
-          if (text === '`')
+          if (text === '`') {
             containerStack.pop();
+            if (topContainerName() === "atLink")
+              containerStack.pop();
+          }
         } else {
           if (text.charAt(0) === '&') {
             addElement(new Rockdown.Node('html', [takeToken()]));
@@ -300,6 +310,13 @@ Rockdown.parse = function (input) {
                 {node: new Rockdown.Node('strongSpan', [takeToken()]),
                  textBlock: textBlock});
             }
+          } else if (text.charAt(0) === '@') {
+            if (text === "@")
+              // before-code-span variant
+              pushContainer({node: new Rockdown.Node('atLink', [takeToken()]),
+                             textBlock: textBlock});
+            else
+              addElement(new Rockdown.Node('atLink', [takeToken()]));
           } else {
             // can't get here
             throw new Error("Unexpected token: " + text);
