@@ -16,7 +16,10 @@ Package.on_test(function (api) {
 
   api.use('rockdown', 'client');
 
-  api.add_files('rockdown_tests.js',
+  api.use('coffeescript');
+
+  api.add_files(['rockdown_suite.coffee',
+                 'rockdown_tests.js'],
                 // Test just on client for faster running; should run
                 // identically on server.
                 'client');

@@ -75,18 +75,43 @@ Tinytest.add("rockdown - basic", function (test) {
   test.equal(stringify(unstringify('foo(bar(`baz`))')), 'foo(bar(baz))');
 
   var tester = makeTester(test);
+  var lines = function (/*args*/) {
+    return Array.prototype.join.call(arguments, '\n');
+  };
 
   tester.goodParse("foo",
                    "document(textBlock(foo))");
-  tester.goodParse("foo\nbar\n",
+  tester.goodParse(lines("foo", "bar", ""),
                    "document(textBlock(foo `\n` bar) blankLine())");
-  tester.goodParse("foo\nbar\n---",
+  tester.goodParse(lines("foo", "bar", "---"),
                    "document(h(textBlock(foo `\n` bar) ---))");
-  tester.goodParse("# foo\nbar\n---",
+  tester.goodParse(lines("# foo",
+                         "bar",
+                         "---"),
                    "document(h(# textBlock(foo)) h(textBlock(bar) ---))");
-  tester.goodParse("# foo\n* bar\n---",
+  tester.goodParse(lines("# foo",
+                         "* bar",
+                         "---"),
                    "document(h(# textBlock(foo)) ul(liCompact(textBlock(bar))) hr(---))");
+  tester.goodParse(lines("* foo",
+                         "* bar",
+                         "* baz"),
+                   "document(ul(liCompact(textBlock(foo)) liCompact(textBlock(bar)) liCompact(textBlock(baz))))");
+
 });
+
+Tinytest.add("rockdown - suite", function (test) {
+  var tester = makeTester(test);
+
+  // defined in other file
+  var suite = rockdownSuite;
+  for(var i = 0; i < suite.length;) {
+    var input = suite[i++];
+    var expectedTree = suite[i++]();
+    tester.goodParse(input, expectedTree);
+  }
+});
+
 
 Tinytest.add("rockdown - StickyRegex", function (test) {
   var testAllPositions = function (regex, source, expectedArray) {
