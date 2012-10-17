@@ -13,9 +13,9 @@ Tinytest.add("rockdown - basic", function (test) {
   // sanity check
   test.equal(stringify(unstringify('foo(bar(`baz`))')), 'foo(bar(baz))');
 
-//  test.equal(stringify(Rockdown.parseLines("foo\nbar\n")),
-//             stringify(unstringify(
-//               "document(physicalLine(foo) physicalLine(bar) physicalLine(``))")));
+  test.equal(stringify(Rockdown.parse("foo\nbar\n")),
+             stringify(unstringify(
+               "document(textBlock(foo `\n` bar) blankLine())")));
 });
 
 Tinytest.add("rockdown - StickyRegex", function (test) {
