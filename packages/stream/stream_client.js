@@ -1,24 +1,14 @@
-// @param url {Function|String} URL or URL-producing function to Meteor app or
-//   sockjs endpoint (deprecated) "http://subdomain.meteor.com/sockjs" or
-//   "/sockjs"
+// @param url {String} URL to Meteor app or sockjs endpoint (deprecated)
+//   "http://subdomain.meteor.com/sockjs" or "/sockjs"
 Meteor._Stream = function (url) {
   var self = this;
 
-  if (typeof(url) === 'string') {
-    self.url = function () {
-      return url.replace(/MeteorWildcard/g, Meteor.uuid);
-    };
-  } else if (typeof(url) === 'function') {
-    self.url = url;
-  } else {
-    throw new Error("Stream url must be string or function: " + url);
-  }
-
+  self.url = Meteor._Stream._toSockjsUrl(url);
   self.socket = null;
   self.event_callbacks = {}; // name -> [callback]
   self.server_id = null;
   self.sent_update_available = false;
-  self.force_fail = false;
+  self.force_fail = false; // for debugging.
 
   //// Constants
 
@@ -57,11 +47,10 @@ Meteor._Stream = function (url) {
     retry_count: 0
   };
 
-  self.status_listeners = {}; // context.id -> context
+  self.status_listeners = (Meteor.deps && new Meteor.deps._ContextSet);
   self.status_changed = function () {
-    _.each(self.status_listeners, function (context) {
-      context.invalidate();
-    });
+    if (self.status_listeners)
+      self.status_listeners.invalidateAll();
   };
 
   //// Retry logic
@@ -113,8 +102,6 @@ _.extend(Meteor._Stream.prototype, {
     if (!self.event_callbacks[name])
       self.event_callbacks[name] = [];
     self.event_callbacks[name].push(callback);
-    if (self.current_status.connected)
-      self.socket.on(name, callback);
   },
 
   // data is a utf8 string. Data sent while not connected is dropped on
@@ -130,21 +117,22 @@ _.extend(Meteor._Stream.prototype, {
   // Get current status. Reactive.
   status: function () {
     var self = this;
-    var context = Meteor.deps && Meteor.deps.Context.current;
-    if (context && !(context.id in self.status_listeners)) {
-      self.status_listeners[context.id] = context;
-      context.onInvalidate(function () {
-        delete self.status_listeners[context.id];
-      });
-    }
+    if (self.status_listeners)
+      self.status_listeners.addCurrentContext();
     return self.current_status;
   },
 
   // Trigger a reconnect.
-  reconnect: function () {
+  reconnect: function (options) {
     var self = this;
-    if (self.current_status.connected)
-      return; // already connected. noop.
+
+    if (self.current_status.connected) {
+      if (options && options._force) {
+        // force reconnect.
+        self._disconnected();
+      } // else, noop.
+      return;
+    }
 
     // if we're mid-connection, stop it.
     if (self.current_status.status === "connecting") {
@@ -323,16 +311,12 @@ _.extend(Meteor._Stream.prototype, {
     var self = this;
     self._cleanup_socket(); // cleanup the old socket, if there was one.
 
-    // Generate a new URL each time we open a connection, so that we can connect
-    // to random hostnames and get around browser per-host connection limits.
-    self.socket = new SockJS(
-      Meteor._Stream._toSockjsUrl(self.url()),
-      undefined,
-      { debug: false, protocols_whitelist: [
-          // only allow polling protocols. no websockets or streaming.
-          // streaming makes safari spin, and websockets hurt chrome.
-          'xdr-polling', 'xhr-polling', 'iframe-xhr-polling', 'jsonp-polling'
-        ]});
+    self.socket = new SockJS(self.url, undefined, {
+      debug: false, protocols_whitelist: [
+        // only allow polling protocols. no websockets or streaming.
+        // streaming makes safari spin, and websockets hurt chrome.
+        'xdr-polling', 'xhr-polling', 'iframe-xhr-polling', 'jsonp-polling'
+      ]});
     self.socket.onmessage = function (data) {
       // first message we get when we're connecting goes to _connected,
       // which connects us. All subsequent messages (while connected) go to

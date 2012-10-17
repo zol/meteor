@@ -1,6 +1,103 @@
 
 ## vNEXT
 
+* This release introduces Meteor Accounts, a full-featured auth system that supports
+  - fine-grained user-based control over database reads and writes
+  - federated login with any OAuth provider (with built-in support for
+    Facebook, GitHub, Google, Twitter, and Weibo)
+  - secure password login
+  - email validation and password recovery
+  - an optional set of UI widgets implementing standard login/signup/password
+    change/logout flows
+
+  When you upgrade to Meteor 0.5.0, existing apps will lose the ability to write
+  to the database from the client. To restore this, either:
+  - configure each of your collections with
+    [`collection.allow`](http://docs.meteor.com/#allow) and
+    [`collection.deny`](http://docs.meteor.com/#deny) calls to specify which
+    users can perform which write operations, or
+  - add the `insecure` smart package (which is included in new apps by default)
+    to restore the old behavior where anyone can write to any collection which
+    has not been configured with `allow` or `deny`
+
+  For more information on Meteor Accounts, see http://docs.meteor.com/#accounts
+
+* The new function `Meteor.autorun` allows you run any code in a reactive
+  context. See http://docs.meteor.com/#meteor_autorun
+
+* Arrays and objects can now be stored in the `Session`; mutating the value you
+  retrieve with `Session.get` does not affect the value in the session.
+
+* On the client, `Meteor.apply` takes a new `wait` option, which ensures that no
+  further method calls are sent to the server until this method is finished; it
+  is used for login and logout methods in order to keep the user ID
+  well-defined. You can also specifiy an `onReconnect` handler which is run when
+  re-establishing a connection; Meteor Accounts uses this to log back in on
+  reconnect.
+
+* Meteor now provides a compatible replacement for the DOM `localStorage`
+  facility that works in IE7, in the `localstorage-polyfill` smart package.
+
+* `Meteor.Collection` now takes its optional `manager` argument (used to
+  associate a collection with a server you've connected to with
+  `Meteor.connect`) as a named option. (The old call syntax continues to work
+  for now.)
+
+* Fix a bug where trying to immediately resubscribe to a record set after
+  unsubscribing could fail silently.
+
+* Better error handling for failed Mongo writes from inside methods; previously,
+  errors here could cause clients to stop processing data from the server.
+
+
+Patches contributed by GitHub users bradens, dandv, dybskiy, possibilities,
+zhangcheng, and 75lb.
+
+
+## v0.4.2
+
+* Fix connection failure on iOS6. SockJS 0.3.3 includes this fix.
+
+* The new `preserve-inputs` package, included by default in new Meteor apps,
+  restores the pre-v0.4.0 behavior of "preserving" all form input elements by ID
+  and name during re-rendering; users who want more precise control over
+  preservation can still use the APIs added in v0.4.0.
+
+* A few changes to the `Meteor.absoluteUrl` function:
+  - Added a `replaceLocalhost` option.
+  - The `ROOT_URL` environment variable is respected by `meteor run`.
+  - It is now included in all apps via the `meteor` package. Apps that
+    explicitly added the now-deprecated `absolute-url` smart package will log a
+    deprecation warning.
+
+* Upgrade Node from 0.8.8 to 0.8.11.
+
+* If a Handlebars helper function `foo` returns null, you can now run do
+  `{{foo.bar}}` without error, just like when `foo` is a non-existent property.
+
+* If you pass a non-scalar object to `Session.set`, an error will now be thrown
+  (matching the behavior of `Session.equals`). #215
+
+* HTML pages are now served with a `charset=utf-8` Content-Type header. #264
+
+* The contents of `<select>` tags can now be reactive even in IE 7 and 8.
+
+* The `meteor` tool no longer gets confused if a parent directory of your
+  project is named `public`. #352
+
+* Fix a race condition in the `spiderable` package which could include garbage
+  in the spidered page.
+
+* The REPL run by `admin/node.sh` no longer crashes Emacs M-x shell on exit.
+
+* Refactor internal `reload` API.
+
+* New internal `jsparse` smart package. Not yet exposed publicly.
+
+
+Patch contributed by GitHub user yanivoliver.
+
+
 ## v0.4.1
 
 * New `email` smart package, with [`Email.send`](http://docs.meteor.com/#email)
