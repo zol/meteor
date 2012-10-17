@@ -1,31 +1,4 @@
 
-// Node names:
-// - document
-// - textBlock
-// - blockquote
-// - ul
-// - li
-// - liCompact
-// - fence
-// - ```
-// - h
-// - hr
-// - singleTag
-// - blankLine
-
-// Inline nodes:
-// - code
-// - em
-// - atLink
-// - strong
-// - `
-// - *
-// - __
-// - html
-// - >
-// - mdash
-
-
 (function () {
 
 Rockdown = {};
@@ -92,6 +65,30 @@ Rockdown.Node = function (name, children) {
   if (! isArray(children))
     throw new Error("Expected array in new ParseNode(" + name + ", ...)");
 };
+
+// XXX can't check for parserlib package, because we can't
+// ensure that it loads first.  this would be a use case for
+// weak dependencies.
+//if (typeof ParseNode === "function") {
+  // parserlib package is included
+  Rockdown.Node.stringify = function (tree) {
+    if (typeof ParseNode !== "function")
+      throw new Error("This function requires the parserlib package.");
+    return ParseNode.stringify(tree, Rockdown.Node);
+  };
+
+  Rockdown.Node.unstringify = function (str) {
+    if (typeof ParseNode !== "function")
+      throw new Error("This function requires the parserlib package.");
+    return ParseNode.unstringify(str, Rockdown.Node);
+  };
+
+  Rockdown.Node.prototype.stringify = function () {
+    if (typeof ParseNode !== "function")
+      throw new Error("This function requires the parserlib package.");
+    return Rockdown.Node.stringify(this);
+  };
+//}
 
 Rockdown.Token = function (pos, text, type) {
   this._pos = pos;

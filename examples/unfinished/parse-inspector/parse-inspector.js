@@ -166,6 +166,10 @@ if (Meteor.is_client) {
         tree, Rockdown.Node, input.length, function (name) {
           return false;
         }, 'rdlex');
+
+      // for manually inspecting / copying for tests
+      Session.set("rockdownRep", tree.stringify());
+
       return new Handlebars.SafeString(html);
 
     } else if (outputType === "rockdownpreview") {
