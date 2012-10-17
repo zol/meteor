@@ -1,4 +1,27 @@
 
+// Node names:
+// - document
+// - textBlock
+// - html
+// - >
+// - codeSpan
+// - emSpan
+// - atLink
+// - strongSpan
+// - `
+// - *
+// - __
+// - quotedBlock
+// - list
+// - listItem
+// - listItemCompact
+// - fencedBlock
+// - ```
+// - hashHead
+// - ruledHead
+// - rule
+// - singleTag
+
 (function () {
 
 Rockdown = {};
