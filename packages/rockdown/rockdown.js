@@ -2,25 +2,29 @@
 // Node names:
 // - document
 // - textBlock
-// - html
-// - >
-// - codeSpan
-// - emSpan
+// - blockquote
+// - ul
+// - li
+// - liCompact
+// - fence
+// - ```
+// - h
+// - hr
+// - singleTag
+// - blankLine
+
+// Inline nodes:
+// - code
+// - em
 // - atLink
-// - strongSpan
+// - strong
 // - `
 // - *
 // - __
-// - quotedBlock
-// - list
-// - listItem
-// - listItemCompact
-// - fencedBlock
-// - ```
-// - hashHead
-// - ruledHead
-// - rule
-// - singleTag
+// - html
+// - >
+// - mdash
+
 
 (function () {
 
@@ -128,15 +132,14 @@ Rockdown._regexes = function (regexMap) {
   tagLine: /<[^>]*>(?=[^\S\n]*$)/m, // tag can span over multiple lines
   singleRule: /---([^\S\n]*-)*(?=[^\S\n]*$)/m,
   doubleRule: /===([^\S\n]*=)*(?=[^\S\n]*$)/m,
-  fence: /```/,
   // A complete fence; includes rest of first line, then zero or more
   // complete lines, reluctantly, stopping at either a line starting
   // with some blockquotes and a fence or the end of the input.
   //
   // We are careful to allow the input to end at any time; a partial
   // fence can be considered an error later, or perhaps a warning.
-  // A line starting with a fence always starts a fencedBlock.
-  fencedBlock: /```[^\n]*(\n|$)([^\n]*\n)*?(([^\S\n]+|>)*```|[^\n]*$)/,
+  // A line starting with three backticks always starts a fence.
+  fence: /```[^\n]*(\n|$)([^\n]*\n)*?(([^\S\n]+|>)*```|[^\n]*$)/,
   hashHead: /#+/,
   newline: /\n/,
   // match longest possible string of one or more non-newline characters
@@ -187,7 +190,7 @@ Rockdown.Lexer.prototype.next = function () {
       self.mode = "[[TRAILING]]";
       return tok;
     }
-    if ((tok = token('FENCEDBLOCK', r.fencedBlock))) {
+    if ((tok = token('FENCEDBLOCK', r.fence))) {
       // token includes the entire fenced contents and the end fence.
       // The contents will be parsed later to interpret the first
       // line specially, strip blockquotes, and strip the first line's
@@ -253,8 +256,8 @@ Rockdown.parse = function (input) {
   //   node
   //   textBlock [for textBlock node and any span node]
   //   quoteLevel [for textBlock node]
-  //   compact [for list node]
-  //   column [for listItem and listItemCompact nodes]
+  //   compact [for ul node]
+  //   column [for li and liCompact nodes]
   // }
   var containerStack = [{node: new Rockdown.Node('document', [])}];
   var topContainerName = function () {
@@ -296,7 +299,7 @@ Rockdown.parse = function (input) {
     while (newToken.isContent()) {
       if (newToken.type() === "INLINESPECIAL") {
         var text = newToken.text();
-        if (topContainerName() === 'codeSpan') {
+        if (topContainerName() === 'code') {
           addElement(takeToken());
           if (text === '`') {
             containerStack.pop();
@@ -312,25 +315,25 @@ Rockdown.parse = function (input) {
               htmlNode.children.push(new Rockdown.Node('>', []));
             addElement(htmlNode);
           } else if (/^\s*---/.test(text)) {
-            addElement(new Rockdown.Node('emdash', [takeToken()]));
+            addElement(new Rockdown.Node('mdash', [takeToken()]));
           } else if (text === '`') {
-            pushContainer({node: new Rockdown.Node('codeSpan', [takeToken()]),
+            pushContainer({node: new Rockdown.Node('code', [takeToken()]),
                            textBlock: textBlock});
           } else if (text === '*') {
-            if (topContainerName() === 'emSpan') {
+            if (topContainerName() === 'em') {
               addElement(takeToken());
               containerStack.pop();
             } else {
-              pushContainer({node: new Rockdown.Node('emSpan', [takeToken()]),
+              pushContainer({node: new Rockdown.Node('em', [takeToken()]),
                              textBlock: textBlock});
             }
           } else if (text === '__') {
-            if (topContainerName() === 'strongSpan') {
+            if (topContainerName() === 'strong') {
               addElement(takeToken());
               containerStack.pop();
             } else {
               pushContainer(
-                {node: new Rockdown.Node('strongSpan', [takeToken()]),
+                {node: new Rockdown.Node('strong', [takeToken()]),
                  textBlock: textBlock});
             }
           } else if (text.charAt(0) === '@') {
@@ -356,11 +359,11 @@ Rockdown.parse = function (input) {
       var container = containerStack.pop();
       var type = container.node.name;
       var children = container.node.children;
-      if (type === "codeSpan")
+      if (type === "code")
         children.push(new Rockdown.Node('`', []));
-      else if (type === "emSpan")
+      else if (type === "em")
         children.push(new Rockdown.Node('*', []));
-      else if (type === "strongSpan")
+      else if (type === "strong")
         children.push(new Rockdown.Node('__', []));
     }
   };
@@ -433,33 +436,33 @@ Rockdown.parse = function (input) {
 
       var container = containerStack[i];
       var containerType = containerStack[i].node.name;
-      if (containerType === "quotedBlock") {
+      if (containerType === "blockquote") {
         // must be a BLOCKQUOTE
         if (j < M && starters[j].type() === "BLOCKQUOTE") {
           j++;
         } else {
           break; // no match
         }
-      } else if (containerType === "list") {
+      } else if (containerType === "ul") {
         if (container.compact && isEndOfLine) {
           // detect not-actually-compact list that has a blank line
           // as the second element of its first item
           if (container.node.children.length === 1 &&
               container.node.children[0].children.length <= 1) {
             container.compact = false;
-            container.node.children[0].name = 'listItem';
+            container.node.children[0].name = 'li';
           } else {
             break;
           }
         }
-      } else if (containerType === "listItem" ||
-                 containerType === "listItemCompact") {
-        var listItemColumn = container.column;
+      } else if (containerType === "li" ||
+                 containerType === "liCompact") {
+        var liColumn = container.column;
         var whitespaceLength = 0;
         // amount of whitespace since last blockquote
         for (var k = j-1; k >= 0 && starters[k].type() === "WHITESPACE"; k--)
           whitespaceLength += starters[k].text().length;
-        if ((! (whitespaceLength > listItemColumn)) && ! isEndOfLine)
+        if ((! (whitespaceLength > liColumn)) && ! isEndOfLine)
           break;
       }
     }
@@ -483,25 +486,25 @@ Rockdown.parse = function (input) {
     // starters that weren't matched open new containers
     for(var i = matchedStarters, N = starters.length; i < N; i++) {
       if (starters[i].type() === "BLOCKQUOTE") {
-        if (topContainerName() === "list")
+        if (topContainerName() === "ul")
           containerStack.pop();
-        pushContainer({node: new Rockdown.Node('quotedBlock', [])});
+        pushContainer({node: new Rockdown.Node('blockquote', [])});
       } else if (starters[i].type() === "BULLET") {
-        if (topContainerName() !== "list")
-          pushContainer({node: new Rockdown.Node('list', []),
+        if (topContainerName() !== "ul")
+          pushContainer({node: new Rockdown.Node('ul', []),
                          compact: ! lineIsBlank});
         var isCompact = containerStack[containerStack.length - 1].compact;
         var column = 0;
         for(var j = i-1; j >= 0 && starters[j].type() !== "BLOCKQUOTE"; j--)
           column += starters[j].text().length;
         pushContainer({node: new Rockdown.Node(isCompact ?
-                                               'listItemCompact' :
-                                               'listItem', []),
+                                               'liCompact' :
+                                               'li', []),
                        column: column});
       }
     }
 
-    if (topContainerName() === "list")
+    if (topContainerName() === "ul")
       containerStack.pop();
 
     if (lineIsBlank) {
@@ -518,21 +521,21 @@ Rockdown.parse = function (input) {
       openTextBlock(quoteLevel);
       readTextBlock();
     } else if (newToken.type() === "FENCEDBLOCK") {
-      var fencedBlockToken = takeToken();
-      var fencedBlockNode = new Rockdown.Node("fencedBlock",
-                                              [fencedBlockToken]);
-      var fencedLines = fencedBlockToken.text().split('\n');
+      var fenceToken = takeToken();
+      var fenceNode = new Rockdown.Node("fence",
+                                        [fenceToken]);
+      var fencedLines = fenceToken.text().split('\n');
       var isComplete =
             (fencedLines.length >= 2 &&
              /^[\s>]*```$/.test(fencedLines[fencedLines.length - 1]));
       if (! isComplete)
-        fencedBlockNode.children.push(new Rockdown.Node('```', []));
+        fenceNode.children.push(new Rockdown.Node('```', []));
       if (newToken.type() === "TRAILING")
         takeToken(); // trailing content
-      addElement(fencedBlockNode);
+      addElement(fenceNode);
     } else if (newToken.type() === "HASHHEAD") {
-      var hashHead = new Rockdown.Node('hashHead', [takeToken()]);
-      pushContainer({node: hashHead});
+      var h = new Rockdown.Node('h', [takeToken()]);
+      pushContainer({node: h});
       while (newToken.type() === "WHITESPACE")
         takeToken();
       if (newToken.isContent()) {
@@ -541,7 +544,7 @@ Rockdown.parse = function (input) {
         readTextBlock();
         closeTextBlock();
       }
-      containerStack.pop(); // hashHead
+      containerStack.pop(); // h
     } else if (newToken.type() === "SINGLERULE" ||
                newToken.type() === "DOUBLERULE") {
       var topNode = containerStack[containerStack.length - 1].node;
@@ -549,13 +552,13 @@ Rockdown.parse = function (input) {
       if (prevSibs.length &&
           prevSibs[prevSibs.length - 1] instanceof Rockdown.Node &&
           prevSibs[prevSibs.length - 1].name === "textBlock") {
-        // combine rule with textBlock to make ruledHead
+        // combine rule with textBlock to make h
         var textBlock = prevSibs.pop();
-        var ruledHead = new Rockdown.Node('ruledHead',
-                                          [textBlock, takeToken()]);
-        addElement(ruledHead);
+        var h = new Rockdown.Node('h',
+                                  [textBlock, takeToken()]);
+        addElement(h);
       } else {
-        var node = new Rockdown.Node('rule', [takeToken()]);
+        var node = new Rockdown.Node('hr', [takeToken()]);
         addElement(node);
       }
     } else if (newToken.type() === "TAGLINE") {
