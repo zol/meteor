@@ -147,17 +147,53 @@ Rockdown._regexes = function (regexMap) {
   boringContent: /[^\*`&<\s_-]+/,
   // important that specials can't contain '`'.
   // the HTML tag special can span over multiple lines.
-  inlineSpecial: /\*|__|`|&[#0-9a-z]+;|<\/?[a-z][^`>]*>?|[^\S\n]*---[^\S\n]*|@((?=`)|[-a-zA-Z0-9_().,]*[-a-zA-Z0-9_()])/mi
+  inlineSpecial: /\*|__|`|&[#0-9a-z]+;|<\/?[a-z][^`>]*>?|[^\S\n]*---[^\S\n]*|@((?=`)|[-a-zA-Z0-9_().,]*[-a-zA-Z0-9_()])/mi,
+
+  BLOCKQUOTE_INDENT: /[^\S\n]{0,3}>/,
+  LI_INDENT_0: /[^\S\n]{1}/,
+  LI_INDENT_1: /[^\S\n]{2}/,
+  LI_INDENT_2: /[^\S\n]{3}/,
+  LI_INDENT_3: /[^\S\n]{4}/,
+  CODEBLOCK_INDENT_0: / {4}/,
+  CODEBLOCK_INDENT_1: /[^\S\n] {4}/,
+
+  BLOCKQUOTE_OPENER: /[^\S\n]{0,3}>[^\S\n]?/,
+  LI_OPENER: /[^\S\n]{0,3}(\*|-(?!-)|\+(?!\+))([^\S\n]|$)/m,
+  CODEBLOCK_OPENER: / {4}(?=\S)/,
+
+  REST: /[^\n]+/,
+  NEWLINE: /\n/,
+
+  BLANK_LINE: /^$/m
+
 });
 
 Rockdown.Lexer = function (input) {
   this.input = input;
   this.pos = 0;
-  this.mode = "[[LINESTART]]";
+  this._tokenQueue = [];
+  this._blockStack = [];
 };
 
 Rockdown.Lexer.prototype.next = function () {
+  var queue = this._tokenQueue;
+  if (! queue.length)
+    this._fill();
+
+  var tok = queue.shift();
+  if (tok.type() === "EOF")
+    // put EOF back; return it next time too
+    queue.unshift(tok);
+  this.counter = (this.counter || 0) + 1;
+  if (this.counter === 1000)
+    return Rockdown.Token(0, '', 'EOF');
+  console.log(tok.type());
+  return tok;
+};
+
+Rockdown.Lexer.prototype._fill = function () {
   var self = this;
+  var queue = self._tokenQueue;
 
   var token = function (type, stickyRegex) {
     var pos = self.pos;
@@ -173,76 +209,107 @@ Rockdown.Lexer.prototype.next = function () {
   var r = Rockdown._regexes;
 
   var tok;
-  if ((tok = token('EOF', r.eof)))
-    return tok;
 
-  if (self.mode === "[[LINESTART]]") {
-    if ((tok = (token('WHITESPACE', r.whitespace) ||
-                token('BLOCKQUOTE', r.blockquote) ||
-                token('BULLET', r.bullet))))
-      return tok;
-    if ((tok = (token('TAGLINE', r.tagLine) ||
-                token('SINGLERULE', r.singleRule) ||
-                token('DOUBLERULE', r.doubleRule)))) {
-      self.mode = "[[TRAILING]]";
-      return tok;
-    }
-    if ((tok = token('FENCEDBLOCK', r.fence))) {
-      // token includes the entire fenced contents and the end fence.
-      // The contents will be parsed later to interpret the first
-      // line specially, strip blockquotes, and strip the first line's
-      // indentation.
-      // There may be trailing non-whitespace after the end fence
-      // that should get mopped up by the trailing mode.
-      self.mode = "[[TRAILING]]";
-      return tok;
-    }
-    if ((tok = token('HASHHEAD', r.hashHead))) {
-      self.mode = "[[PRECONTENT]]";
-      return tok;
-    }
-    self.mode = "[[CONTENT]]";
-    // FALL THROUGH...
+  if ((tok = token('EOF', r.eof))) {
+    queue.push(tok);
+    return;
   }
-  if (self.mode === "[[PRECONTENT]]") {
-    if ((tok = token('WHITESPACE', r.whitespace)))
-      return tok;
-    self.mode = "[[CONTENT]]";
-    // FALL THROUGH...
-  }
-  if (self.mode === "[[CONTENT]]") {
-    var lastPos = self.pos;
-    var tokenText = "";
-    while (peek(r.restNoTrailingWhitespace) &&
-           ! peek(r.inlineSpecial)) {
-      var boringContentMatch = r.boringContent.matchAt(self.input, self.pos);
-      var result = (boringContentMatch || self.input.charAt(self.pos));
-      tokenText += result;
-      self.pos += result.length;
-    }
-    if (self.pos > lastPos)
-      return new Rockdown.Token(lastPos, tokenText, "CONTENT");
 
-    if ((tok = token('INLINESPECIAL', r.inlineSpecial)))
-      return tok;
+  if ((tok = token('BLANK_LINE', r.BLANK_LINE))) {
+    queue.push(tok);
+  } else {
 
-    self.mode = "[[TRAILING]]";
-    // FALL THROUGH...
-  }
-  if (self.mode === "[[TRAILING]]") {
-    if ((tok = (token('TRAILING', r.restNoTrailingWhitespace) ||
-                token('WHITESPACE', r.whitespace))))
-      return tok;
-
-    if ((tok = token('NEWLINE', r.newline))) {
-      self.mode = "[[LINESTART]]";
-      return tok;
+    // openers
+    while (true) {
+      if ((tok = token('BLOCKQUOTE_OPENER', r.BLOCKQUOTE_OPENER)))
+        queue.push(tok);
+      else if ((tok = token('LI_OPENER', r.LI_OPENER)))
+        queue.push(tok);
+      else if ((tok = token('CODEBLOCK_OPENER', r.CODEBLOCK_OPENER)))
+        queue.push(tok);
+      else
+        break;
     }
-    // we've already checked for EOF, \n, \S, and [^\S\n], which is
-    // all possible characters that could come next.
-    throw new Error("can't get here");
+
+    // try to read non-empty rest of line
+    if ((tok = token('REST', r.REST)))
+      queue.push(tok);
+
   }
-  throw new Error("Unknown mode: " + self.mode);
+
+  // try to read newline
+  if ((tok = token('NEWLINE', r.NEWLINE)))
+    queue.push(tok);
+
+
+
+  // if (self.mode === "[[LINESTART]]") {
+  //   if ((tok = (token('WHITESPACE', r.whitespace) ||
+  //               token('BLOCKQUOTE', r.blockquote) ||
+  //               token('BULLET', r.bullet))))
+  //     return tok;
+  //   if ((tok = (token('TAGLINE', r.tagLine) ||
+  //               token('SINGLERULE', r.singleRule) ||
+  //               token('DOUBLERULE', r.doubleRule)))) {
+  //     self.mode = "[[TRAILING]]";
+  //     return tok;
+  //   }
+  //   if ((tok = token('FENCEDBLOCK', r.fence))) {
+  //     // token includes the entire fenced contents and the end fence.
+  //     // The contents will be parsed later to interpret the first
+  //     // line specially, strip blockquotes, and strip the first line's
+  //     // indentation.
+  //     // There may be trailing non-whitespace after the end fence
+  //     // that should get mopped up by the trailing mode.
+  //     self.mode = "[[TRAILING]]";
+  //     return tok;
+  //   }
+  //   if ((tok = token('HASHHEAD', r.hashHead))) {
+  //     self.mode = "[[PRECONTENT]]";
+  //     return tok;
+  //   }
+  //   self.mode = "[[CONTENT]]";
+  //   // FALL THROUGH...
+  // }
+  // if (self.mode === "[[PRECONTENT]]") {
+  //   if ((tok = token('WHITESPACE', r.whitespace)))
+  //     return tok;
+  //   self.mode = "[[CONTENT]]";
+  //   // FALL THROUGH...
+  // }
+  // if (self.mode === "[[CONTENT]]") {
+  //   var lastPos = self.pos;
+  //   var tokenText = "";
+  //   while (peek(r.restNoTrailingWhitespace) &&
+  //          ! peek(r.inlineSpecial)) {
+  //     var boringContentMatch = r.boringContent.matchAt(self.input, self.pos);
+  //     var result = (boringContentMatch || self.input.charAt(self.pos));
+  //     tokenText += result;
+  //     self.pos += result.length;
+  //   }
+  //   if (self.pos > lastPos)
+  //     return new Rockdown.Token(lastPos, tokenText, "CONTENT");
+
+  //   if ((tok = token('INLINESPECIAL', r.inlineSpecial)))
+  //     return tok;
+
+  //   self.mode = "[[TRAILING]]";
+  //   // FALL THROUGH...
+  // }
+  // if (self.mode === "[[TRAILING]]") {
+  //   if ((tok = (token('TRAILING', r.restNoTrailingWhitespace) ||
+  //               token('WHITESPACE', r.whitespace))))
+  //     return tok;
+
+  //   if ((tok = token('NEWLINE', r.newline))) {
+  //     self.mode = "[[LINESTART]]";
+  //     return tok;
+  //   }
+  //   // we've already checked for EOF, \n, \S, and [^\S\n], which is
+  //   // all possible characters that could come next.
+  //   throw new Error("can't get here");
+  // }
+  // throw new Error("Unknown mode: " + self.mode);
 };
 
 Rockdown.parse = function (input) {

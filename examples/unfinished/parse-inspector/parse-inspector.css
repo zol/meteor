@@ -98,13 +98,13 @@ html, body { height: 100%; }
 
 .lex_keyword, .rdlex_hashhead { background: #0f0; }
 .lex_identifier, .rdlex_tagline, .rdlex_singlerule, .rdlex_doublerule { background: #ff0; }
-.lex_punctuation, .rdlex_blockquote { background: #0ff; }
+.lex_punctuation, .rdlex_blockquote_opener, .rdlex_li_opener { background: #0ff; }
 .lex_error { background: #f00; }
 .lex_whitespace, .lex_newline, .lex_eof { background: #fcc; }
 .lex_comment, .rdlex_content { background: #ccc; }
 
-.lex_regex, .rdlex_bullet { background: #f0f; }
-.lex_null, .rdlex_trailing { background: #dac; }
+.lex_regex, .rdlex_codeblock_opener { background: #f0f; }
+.lex_null, .rdlex_rest { background: #dac; }
 .lex_boolean, .rdlex_inlinespecial { background: #faf; }
 .lex_number { background: #c3f; }
 .lex_string, .rdlex_fencedblock { background: #fc3; }
