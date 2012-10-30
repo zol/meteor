@@ -90,6 +90,11 @@ Example:
         // don't care about moved or changed
       });
 
+      // Observe only returns after the initial added callbacks have
+      // run.  Now mark the subscription as ready.
+      self.complete();
+      self.flush();
+
       // remove data and turn off observe when client unsubs
       self.onStop(function () {
         handle.stop();
@@ -135,10 +140,11 @@ is the place to stop the observes.
 {{> api_box subscribe}}
 
 When you subscribe to a record set, it tells the server to send records
-to the client.  The client stores these records in local Minimongo
-collections, with the same name as the `collection` argument to `set`.
-Meteor will queue incoming attributes until you declare the
-`Meteor.Collection` on the client with the matching collection name.
+to the client.  The client stores these records in local [Minimongo
+collections](#meteor_collection), with the same name as the `collection`
+argument to `set`.  Meteor will queue incoming attributes until you
+declare the [`Meteor.Collection`](#meteor_collection) on the client with
+the matching collection name.
 
     // okay to subscribe (and possibly receive data) before declaring
     // the client collection that will hold it.  assume "allplayers"
@@ -920,6 +926,26 @@ Example:
 
     // After five seconds, stop keeping the count.
     setTimeout(function () {handle.stop();}, 5000);
+
+{{> api_box uuid}}
+
+This returns a random text string such as `b6df7139-df0b-4daa-8c9e-b432a90bc048`
+that is likely to be unique in the whole world. The format of the string
+complies with the [RFC 4122](http://tools.ietf.org/html/rfc4122) v4 format.
+
+{{#note}}
+  Currently Meteor uses this function to generate `_id` fields for new
+  Mongo documents. In the future we will likely switch to native
+  binary Mongo IDs. At that point this function will be deprecated or
+  moved into a separate package.
+{{/note}}
+
+{{#note}}
+  In the current implementation, the returned string is derived from a
+  pseudorandom number generator that is seeded with the current
+  time. The UUIDs generated definitely are not random enough to be
+  used for cryptographic or security purposes.
+{{/note}}
 
 {{#api_box_inline selectors}}
 
