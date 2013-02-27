@@ -3,6 +3,14 @@
   var querystring = __meteor_bootstrap__.require('querystring');
 
   Accounts.oauth.registerService('facebook', 2, function(query) {
+    // XXX we should also extend the access token to a long-lived one:
+    // https://developers.facebook.com/docs/howtos/login/extending-tokens/#step1
+    if (query.access_token)
+      accessToken = query.access_token;
+    else
+      accessToken = getAccessToken(query);
+
+    var identity = getIdentity(accessToken);
 
     var response = getTokenResponse(query);
     var accessToken = response.accessToken;
