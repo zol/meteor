@@ -88,8 +88,10 @@ var PackageBundlingInfo = function (pkg, bundle, isTest) {
   self.where = {};
 
   // other packages we've used (with any 'where') -- map from id to
-  // PackageBundlingInfo
+  // PackageBundlingInfo. self.unordered[id] will be true if we have
+  // used the package but not imposed an ordering constraint.
   self.using = {};
+  self.unordered = {};
 
   // map from where (client, server) to a source file name (relative
   // to the package) to true
@@ -111,7 +113,23 @@ var PackageBundlingInfo = function (pkg, bundle, isTest) {
     // Called when this package wants to make another package be
     // used. Can also take literal package objects, if you have
     // anonymous packages you want to use (eg, app packages)
-    use: function (names, where) {
+    //
+    // options can include:
+    //
+    // - unordered: if true, don't require this package to load before
+    //   us -- just require it to be loaded anytime. If false,
+    //   override a true value specified in a previous call to use for
+    //   this package pain. (A limitation of the current
+    //   implementation is that this flag is not tracked
+    //   per-environment.) Can be used to resolve circular
+    //   dependencies in exceptional circumstances, eg, the 'meteor'
+    //   package depends on 'handlebars', but all packages (including
+    //   'handlebars') have an implicit dependency on
+    //   'meteor'. Internal use only -- future support of this is not
+    //   guaranteed. #UnorderedPackageReferences
+    use: function (names, where, options) {
+      options = _.clone(options || {});
+
       if (!(names instanceof Array))
         names = names ? [names] : [];
 
@@ -122,7 +140,8 @@ var PackageBundlingInfo = function (pkg, bundle, isTest) {
         });
         if (!pkg)
           throw new Error("Package not found: " + name);
-        self.bundle.use(pkg, where, self);
+        options.from = self;
+        self.bundle.use(pkg, where, options);
       });
     },
 
@@ -332,9 +351,10 @@ _.extend(PackageBundlingInfo.prototype, {
 
 // Taken an array of PackageBundlingInfo as input. Return an array
 // with the same PackageBundlingInfo, but sorted such that if X
-// depends on (uses) Y in any environment, Y appears before X in the
-// ordering. Raises an exception iff there is no such ordering (due to
-// circular dependency.)
+// depends on (uses) Y in any environment, and that relationship is
+// not marked as unordered, Y appears before X in the ordering. Raises
+// an exception iff there is no such ordering (due to circular
+// dependency.)
 var loadOrderPbis = function (pbis) {
   var id = function (pbi) {
     return pbi.pkg.id + (pbi.isTest ? "T" : "");
@@ -364,30 +384,12 @@ var loadOrderPbis = function (pbis) {
         return;
 
       _.each(_.values(pbi.using), function (usedPbi) {
-/*
-        // If a package is careless and depends on itself (this has
-        // been the pattern for setting up tests, for some reason I
-        // don't fully remember) then ignore that.
-        if (pbi === usedPbi)
-          return;
-XXX*/
-
-        // Everything has an implicit dependency on "meteor", which
-        // sets up the basic environment (including the *.js handler!)
-        // Unfortunately that includes "underscore" which "meteor"
-        // depends on. This should be refactored one day but as an
-        // expedient temporary solution, force-load "underscore"
-        // before "meteor".
-        //
-        // Similarly, running the tests for "meteor" requires
-        // "tinytest". Of course it only requires that "tinytest" be
-        // present, not that "tinytest" load before "meteor". Resolve
-        // this one manually as well.
-        if ((pbi.pkg.name === "underscore" && usedPbi.pkg.name === "meteor") /*||
-            XXX(pbi.pkg.name === "meteor" && usedPbi.pkg.name === "tinytest")*/)
+        if (pbi.unordered[usedPbi.pkg.id])
           return;
 
         if (onStack[id(usedPbi)])
+          // XXX should not throw an exception, resulting in a nasty
+          // stack trace! should gracefully print a message!
           throw new Error("Circular dependency between packages: " +
                           pbi.pkg.name + " and " + usedPbi.pkg.name);
         onStack[usedPbi.pkg.id] = true;
@@ -479,16 +481,26 @@ _.extend(Bundle.prototype, {
     return hash.digest('hex');
   },
 
-  // Call to add a package to this bundle
-  // if 'where' is given, it's an array of "client" and/or "server"
-  // if 'from' is given, it's the PackageBundlingInfo that's doing the
-  // using, or it can be undefined for top level
-  use: function (pkg, where, from) {
+  // Call to add a package to this bundle. If 'where' is given, it's
+  // an array of "client" and/or "server".
+  //
+  // options can include:
+  // - from: if given, it's the PackageBundlingInfo that's doing the
+  //   using, or omit to indicate top level
+  // - unordered: if true, don't constrain pkg to load before
+  //   options.from. The latest specified value for unordered
+  //   wins. See #UnorderedPackageReferences
+  use: function (pkg, where, options) {
     var self = this;
+    options = options || {};
+
     var inst = self._get_bundling_info_for_package(pkg);
 
-    if (from)
-      from.using[pkg.id] = inst;
+    if (options.from) {
+      options.from.using[pkg.id] = inst;
+      if ('unordered' in options)
+        options.from.unordered[pkg.id] = !! options.unordered;
+    }
 
     // get 'canonicalized where'
     var canon_where = where;
@@ -504,9 +516,6 @@ _.extend(Bundle.prototype, {
     if (inst.where[canon_where])
       return; // already used in this environment
     inst.where[canon_where] = true;
-
-    // XXX detect circular dependencies and print an error. (not sure
-    // what the current code will do)
 
     if (pkg.npmDependencies) {
       pkg.installNpmDependencies();
