@@ -181,6 +181,83 @@ var PackageBundlingInfo = function (pkg, bundle, isTest) {
     // to have failed.
     error: function (message) {
       self.bundle.errors.push(message);
+    },
+
+    /**
+     * This is the ultimate low-level API to add data to the bundle.
+     *
+     * type: "js", "css", "head", "body", "static"
+     *
+     * where: an environment, or a list of one or more environments
+     * ("client", "server", "tests") -- for non-JS resources, the only
+     * legal environment is "client"
+     *
+     * path: the (absolute) path at which the file will be
+     * served. ignored in the case of "head" and "body".
+     *
+     * source_file: the absolute path to read the data from. if path
+     * is set, will default based on that. overridden by data.
+     *
+     * data: the data to send. overrides source_file if present. you
+     * must still set path (except for "head" and "body".)
+     */
+    add_resource: function (options) {
+      var source_file = options.source_file || options.path;
+
+      console.log("add_resource " + options.type + " " + options.path + " " + options.where);
+
+      var data;
+      if (options.data) {
+        data = options.data;
+        if (!(data instanceof Buffer)) {
+          if (!(typeof data === "string"))
+            throw new Error("Bad type for data");
+          data = new Buffer(data, 'utf8');
+        }
+      } else {
+        if (!source_file)
+          throw new Error("Need either source_file or data");
+        data = fs.readFileSync(source_file);
+      }
+
+      var where = options.where;
+      if (typeof where === "string")
+        where = [where];
+      if (!where)
+        throw new Error("Must specify where");
+
+      _.each(where, function (w) {
+        if (options.type === "js") {
+          if (!options.path)
+            throw new Error("Must specify path");
+
+          if (w === "client" || w === "server") {
+            self.bundle.files[w][options.path] = data;
+            self.bundle.js[w].push(options.path);
+          } else {
+            throw new Error("Invalid environment");
+          }
+        } else if (options.type === "css") {
+          if (w !== "client")
+            // XXX might be nice to throw an error here, but then we'd
+            // have to make it so that packages.js ignores css files
+            // that appear in the server directories in an app tree
+            return;
+          if (!options.path)
+            throw new Error("Must specify path");
+          self.bundle.files.client[options.path] = data;
+          self.bundle.css.push(options.path);
+        } else if (options.type === "head" || options.type === "body") {
+          if (w !== "client")
+            throw new Error("HTML segments can only go to the client");
+          self.bundle[options.type].push(data);
+        } else if (options.type === "static") {
+          self.bundle.files[w][options.path] = data;
+          self.bundle.static[w].push(options.path);
+        } else {
+          throw new Error("Unknown type " + options.type);
+        }
+      });
     }
   };
 
@@ -235,7 +312,7 @@ _.extend(PackageBundlingInfo.prototype, {
     if (!handler) {
       // If we don't have an extension handler, serve this file
       // as a static resource.
-      self.bundle.api.add_resource({
+      self.api.add_resource({
         type: "static",
         path: path.join(self.pkg.serve_root, rel_path),
         data: fs.readFileSync(path.join(self.pkg.source_root, rel_path)),
@@ -244,11 +321,10 @@ _.extend(PackageBundlingInfo.prototype, {
       return;
     }
 
-    handler(self.bundle.api,
+    handler(self.api,
             path.join(self.pkg.source_root, rel_path),
             path.join(self.pkg.serve_root, rel_path),
-            where,
-            self.api);
+            where);
 
     self.dependencies[rel_path] = true;
   }
@@ -382,93 +458,6 @@ var Bundle = function () {
 
   // list of errors encountered while bundling. array of string.
   self.errors = [];
-
-  // the API available from register_extension handlers
-  self.api = {
-    /**
-     * This is the ultimate low-level API to add data to the bundle.
-     *
-     * type: "js", "css", "head", "body", "static"
-     *
-     * where: an environment, or a list of one or more environments
-     * ("client", "server", "tests") -- for non-JS resources, the only
-     * legal environment is "client"
-     *
-     * path: the (absolute) path at which the file will be
-     * served. ignored in the case of "head" and "body".
-     *
-     * source_file: the absolute path to read the data from. if path
-     * is set, will default based on that. overridden by data.
-     *
-     * data: the data to send. overrides source_file if present. you
-     * must still set path (except for "head" and "body".)
-     */
-    add_resource: function (options) {
-      var source_file = options.source_file || options.path;
-
-      console.log("add_resource " + options.type + " " + options.path + " " + options.where);
-
-      var data;
-      if (options.data) {
-        data = options.data;
-        if (!(data instanceof Buffer)) {
-          if (!(typeof data === "string"))
-            throw new Error("Bad type for data");
-          data = new Buffer(data, 'utf8');
-        }
-      } else {
-        if (!source_file)
-          throw new Error("Need either source_file or data");
-        data = fs.readFileSync(source_file);
-      }
-
-      var where = options.where;
-      if (typeof where === "string")
-        where = [where];
-      if (!where)
-        throw new Error("Must specify where");
-
-      _.each(where, function (w) {
-        if (options.type === "js") {
-          if (!options.path)
-            throw new Error("Must specify path");
-
-          if (w === "client" || w === "server") {
-            self.files[w][options.path] = data;
-            self.js[w].push(options.path);
-          } else {
-            throw new Error("Invalid environment");
-          }
-        } else if (options.type === "css") {
-          if (w !== "client")
-            // XXX might be nice to throw an error here, but then we'd
-            // have to make it so that packages.js ignores css files
-            // that appear in the server directories in an app tree
-            return;
-          if (!options.path)
-            throw new Error("Must specify path");
-          self.files.client[options.path] = data;
-          self.css.push(options.path);
-        } else if (options.type === "head" || options.type === "body") {
-          if (w !== "client")
-            throw new Error("HTML segments can only go to the client");
-          self[options.type].push(data);
-        } else if (options.type === "static") {
-          self.files[w][options.path] = data;
-          self.static[w].push(options.path);
-        } else {
-          throw new Error("Unknown type " + options.type);
-        }
-      });
-    },
-
-    // Report an error. It should be a single human-readable
-    // string. If any errors are reported, the bundling is considered
-    // to have failed.
-    error: function (message) {
-      self.errors.push(message);
-    }
-  };
 };
 
 _.extend(Bundle.prototype, {
@@ -603,7 +592,7 @@ _.extend(Bundle.prototype, {
         pbi.linkerInputs[where] = [];
 
         _.each(outputs, function (output) {
-          self.api.add_resource({
+          pbi.api.add_resource({
             type: "js",
             where: where,
             path: output.servePath,

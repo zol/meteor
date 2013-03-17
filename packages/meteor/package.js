@@ -6,14 +6,14 @@ Package.describe({
 });
 
 Package.register_extension(
-  "js", function (bundle, source_path, serve_path, where, pkg) {
+  "js", function (bundle, source_path, serve_path, where) {
     // XXX consider what it means to read the file as utf8. does it
     // mean that we simply require all javascript files in projects to
     // be utf8? or do we have some way of detecting/specifying the
     // encoding? hasn't been a problem so far however
     var fs = Npm.require('fs');
     var source = fs.readFileSync(source_path, "utf8");
-    pkg.addJavaScript(source, serve_path, where);
+    bundle.addJavaScript(source, serve_path, where);
   }
 );
 
