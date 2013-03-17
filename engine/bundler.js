@@ -460,13 +460,13 @@ var Bundle = function () {
 };
 
 _.extend(Bundle.prototype, {
-  _get_bundling_info_for_package: function (pkg) {
+  _get_bundling_info_for_package: function (pkg, role) {
     var self = this;
 
-    var bundlingInfo = self.packageBundlingInfo.use[pkg.id];
+    var bundlingInfo = self.packageBundlingInfo[role][pkg.id];
     if (!bundlingInfo) {
-      bundlingInfo = new PackageBundlingInfo(pkg, self, "use");
-      self.packageBundlingInfo.use[pkg.id] = bundlingInfo;
+      bundlingInfo = new PackageBundlingInfo(pkg, self, role);
+      self.packageBundlingInfo[role][pkg.id] = bundlingInfo;
     }
 
     return bundlingInfo;
@@ -491,7 +491,7 @@ _.extend(Bundle.prototype, {
     var self = this;
     options = options || {};
 
-    var inst = self._get_bundling_info_for_package(pkg);
+    var inst = self._get_bundling_info_for_package(pkg, "use");
 
     if (options.from) {
       options.from.using[pkg.id] = inst;
@@ -537,8 +537,7 @@ _.extend(Bundle.prototype, {
     }
     if (self.packageBundlingInfo.test[pkg.id])
       return;
-    var inst = new PackageBundlingInfo(pkg, self, "test");
-    self.packageBundlingInfo.test[pkg.id] = inst;
+    var inst = self._get_bundling_info_for_package(pkg, "test");
 
     // XXX we might want to support npm modules that are only used in
     // tests. one example is stream-buffers as used in the email
