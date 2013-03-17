@@ -88,10 +88,10 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   // XXX this is a mess, refactor
   self.where = {};
 
-  // other packages we've used (with any 'where') -- map from id to
-  // PackageBundlingInfo. self.unordered[id] will be true if we have
-  // used the package but not imposed an ordering constraint.
-  self.using = {};
+  // other packages we've used (with any 'where') -- map from role to
+  // id to PackageBundlingInfo. self.unordered[id] will be true if we
+  // have used the package but not imposed an ordering constraint.
+  self.using = {use: {}, test: {}};
   self.unordered = {};
 
   // map from where (client, server) to a source file name (relative
@@ -128,6 +128,10 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
     //   'handlebars') have an implicit dependency on
     //   'meteor'. Internal use only -- future support of this is not
     //   guaranteed. #UnorderedPackageReferences
+    //
+    // - role: defaults to "use", but you could pass something like
+    //   "test" if for some reason you wanted to include a package's
+    //   tests
     use: function (names, where, options) {
       options = _.clone(options || {});
 
@@ -135,14 +139,8 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
         names = names ? [names] : [];
 
       _.each(names, function (name) {
-        var pkg = packages.get(name, {
-          releaseManifest: self.bundle.releaseManifest,
-          appDir: self.bundle.appDir
-        });
-        if (!pkg)
-          throw new Error("Package not found: " + name);
         options.from = self;
-        self.bundle.use(pkg, where, options);
+        self.bundle.use(name, where, options);
       });
     },
 
@@ -188,8 +186,8 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
     registered_extensions: function () {
       var ret = _.keys(self.pkg.extensions);
 
-      for (var id in self.using) {
-        var other_inst = self.using[id];
+      for (var id in self.using.use) {
+        var other_inst = self.using.use[id];
         ret = _.union(ret, _.keys(other_inst.pkg.extensions));
       }
 
@@ -297,8 +295,8 @@ _.extend(PackageBundlingInfo.prototype, {
     if (extension in self.pkg.extensions)
       candidates.push(self.pkg.extensions[extension]);
 
-    for (var id in self.using) {
-      var other_inst = self.using[id];
+    for (var id in self.using.use) {
+      var other_inst = self.using.use[id];
       var other_pkg = other_inst.pkg;
       if (extension in other_pkg.extensions)
         candidates.push(other_pkg.extensions[extension]);
@@ -384,18 +382,20 @@ var loadOrderPbis = function (pbis) {
       if (done[id(pbi)])
         return;
 
-      _.each(_.values(pbi.using), function (usedPbi) {
-        if (pbi.unordered[usedPbi.pkg.id])
-          return;
+      _.each(_.values(pbi.using), function (idToPbiMap) { // roles
+        _.each(_.values(idToPbiMap), function (usedPbi) {
+          if (pbi.unordered[usedPbi.pkg.id])
+            return;
 
-        if (onStack[id(usedPbi)])
-          // XXX should not throw an exception, resulting in a nasty
-          // stack trace! should gracefully print a message!
-          throw new Error("Circular dependency between packages: " +
-                          pbi.pkg.name + " and " + usedPbi.pkg.name);
-        onStack[usedPbi.pkg.id] = true;
-        load(usedPbi);
-        delete onStack[id(usedPbi)];
+          if (onStack[id(usedPbi)])
+            // XXX should not throw an exception, resulting in a nasty
+            // stack trace! should gracefully print a message!
+            throw new Error("Circular dependency between packages: " +
+                            pbi.pkg.name + " and " + usedPbi.pkg.name);
+          onStack[usedPbi.pkg.id] = true;
+          load(usedPbi);
+          delete onStack[id(usedPbi)];
+        });
       });
       ret.push(pbi);
       done[id(pbi)] = true;
@@ -478,28 +478,51 @@ _.extend(Bundle.prototype, {
     return hash.digest('hex');
   },
 
-  // Call to add a package to this bundle. If 'where' is given, it's
-  // an array of "client" and/or "server".
+  // Call to add a package to this bundle. The first argument may be
+  // either a package or a package name. If 'where' is given, it's an
+  // array of "client" and/or "server".
   //
   // options can include:
   // - from: if given, it's the PackageBundlingInfo that's doing the
   //   using, or omit to indicate top level
+  // - role: "use", the default, to use the package normally; or
+  //   another role, eg "test", to use a different slice of a package
   // - unordered: if true, don't constrain pkg to load before
   //   options.from. The latest specified value for unordered
   //   wins. See #UnorderedPackageReferences
-  use: function (pkg, where, options) {
+  use: function (packageOrPackageName, where, options) {
     var self = this;
     options = options || {};
+    var role = options.role || "use";
 
-    var inst = self._get_bundling_info_for_package(pkg, "use");
+    // Find the package
+    // 'packages.get' is identity if 'packageOrPackageName' is a Package object.
+    var pkg = packages.get(packageOrPackageName, {
+      releaseManifest: self.releaseManifest,
+      appDir: self.appDir
+    });
+    if (! pkg) {
+      console.error("Package not found: " + packageOrPackageName);
+      process.exit(1);
+    }
 
+    // Find the bundling state for this package and role, creating if
+    // necessary
+    var inst = self._get_bundling_info_for_package(pkg, role);
+
+    // If we're being used by a particular package P, record that P
+    // uses us. This is used for such things as determining which
+    // extension handlers are visible and for load ordering.
     if (options.from) {
-      options.from.using[pkg.id] = inst;
+      options.from.using[role][pkg.id] = inst;
       if ('unordered' in options)
         options.from.unordered[pkg.id] = !! options.unordered;
     }
 
-    // get 'canonicalized where'
+    // If this package has been used before anywhere else in this
+    // bundle, with the exact same environment, then we can stop -- we
+    // know we've already done all of the necessary setup work at
+    // least once.
     var canon_where = where;
     if (!canon_where)
       canon_where = [];
@@ -508,49 +531,23 @@ _.extend(Bundle.prototype, {
     else
       canon_where = _.clone(canon_where);
     canon_where.sort();
-    canon_where = JSON.stringify(canon_where);
+    canon_where = JSON.stringify(canon_where); // 'canonicalized where'
 
     if (inst.where[canon_where])
       return; // already used in this environment
     inst.where[canon_where] = true;
 
+    // Bring npm dependencies up to date. One day this will probably
+    // grow into a full-fledged package build step.
     if (pkg.npmDependencies) {
       pkg.installNpmDependencies();
       self.bundleNodeModules(pkg);
     }
 
-    if (pkg.on_use_handler)
-      pkg.on_use_handler(inst.api, where);
-  },
-
-  includeTests: function (packageOrPackageName) {
-    console.log("include " + packageOrPackageName);
-    var self = this;
-    // 'packages.get' is a noop if 'packageOrPackageName' is a Package object.
-    var pkg = packages.get(packageOrPackageName, {
-      releaseManifest: self.releaseManifest,
-      appDir: self.appDir
-    });
-    if (!pkg) {
-      console.error("Can't find package " + packageOrPackageName);
-      process.exit(1);
-    }
-    if (self.packageBundlingInfo.test[pkg.id])
-      return;
-    var inst = self._get_bundling_info_for_package(pkg, "test");
-
-    // XXX we might want to support npm modules that are only used in
-    // tests. one example is stream-buffers as used in the email
-    // package
-    if (pkg.npmDependencies) {
-      pkg.installNpmDependencies();
-      self.bundleNodeModules(pkg);
-    }
-
-    if (inst.pkg.on_test_handler) {
-      console.log("call on_test handler " + packageOrPackageName);
-      inst.pkg.on_test_handler(inst.api);
-    }
+    // Find and call the package's on_xxx handler (eg, on_use, on_test)
+    var handler = pkg.roleHandlers[role];
+    if (handler)
+      handler(inst.api, where);
   },
 
   // map a package's generated node_modules directory to the package
@@ -578,10 +575,8 @@ _.extend(Bundle.prototype, {
         _.values(self.packageBundlingInfo.test)
       ]);
       console.log("packages unordered: " + _.map(pbis, function (pbi) {return (pbi.isTest ? "test " : "") + pbi.pkg.name;}).join(", ") );
-      console.log(pbis.length);
       pbis = loadOrderPbis(pbis);
       console.log("packages order: " + _.map(pbis, function (pbi) {return (pbi.isTest ? "test " : "") + pbi.pkg.name;}).join(", ") );
-      console.log(pbis.length);
 
       // Link each package and add the linker output to the bundle
       _.each(pbis, function (pbi) {
@@ -979,7 +974,7 @@ exports.bundle = function (app_dir, output_path, options) {
     // Include tests if requested
     if (options.testPackages) {
       _.each(options.testPackages, function(packageOrPackageName) {
-        bundle.includeTests(packageOrPackageName);
+        bundle.use(packageOrPackageName, null, {role: "test"});
       });
     }
 

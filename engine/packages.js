@@ -34,8 +34,7 @@ var Package = function () {
   // package metadata, from describe()
   self.metadata = {};
 
-  self.on_use_handler = null;
-  self.on_test_handler = null;
+  self.roleHandlers = {use: null, test: null};
   self.npmDependencies = null;
 
   // registered source file handlers
@@ -60,15 +59,15 @@ var Package = function () {
     },
 
     on_use: function (f) {
-      if (self.on_use_handler)
+      if (self.roleHandlers.use)
         throw new Error("A package may have only one on_use handler");
-      self.on_use_handler = f;
+      self.roleHandlers.use = f;
     },
 
     on_test: function (f) {
-      if (self.on_test_handler)
+      if (self.roleHandlers.test)
         throw new Error("A package may have only one on_test handler");
-      self.on_test_handler = f;
+      self.roleHandlers.test = f;
     },
 
     register_extension: function (extension, callback) {
