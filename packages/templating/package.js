@@ -27,7 +27,7 @@ Package.on_use(function (api) {
 });
 
 Package.register_extension(
-  "html", function (bundle, source_path, serve_path, where) {
+  "html", function (bundle, source_path, serve_path, where, pkg) {
     if (where !== "client")
       // XXX might be nice to throw an error here, but then we'd have
       // to make it so that packages.js ignores html files that appear
@@ -67,13 +67,7 @@ Package.register_extension(
       var basename = path.basename(serve_path, ext);
       serve_path = path_part + "template." + basename + ".js";
 
-      bundle.add_resource({
-        type: "js",
-        path: serve_path,
-        data: new Buffer(results.js),
-        source_file: source_path,
-        where: where
-      });
+      pkg.addJavaScript(results.js, serve_path, where);
     }
   }
 );

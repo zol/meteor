@@ -38,6 +38,7 @@
 var path = require('path');
 var files = require(path.join(__dirname, 'files.js'));
 var packages = require(path.join(__dirname, 'packages.js'));
+var linker = require(path.join(__dirname, 'linker.js'));
 var warehouse = require(path.join(__dirname, 'warehouse.js'));
 var crypto = require('crypto');
 var fs = require('fs');
@@ -61,10 +62,23 @@ var ignore_files = [
 // Represents the occurrence of a package in a bundle. Includes data
 // relevant to the process of bundling this package, distinct from the
 // package data itself.
-var PackageBundlingInfo = function (pkg, bundle) {
+//
+// If a package is having its tests run, it will have two distinct
+// PackageBundlingInfo instances, one for the package itself, and one
+// for the tests. This lets us get dependency load order correct. (It
+// lets the tests for package P depend on a package D, such as the
+// test system, that depends on P. This would otherwise be a circular
+// dependency.) In the future, we should probably just model tests as
+// totally separate packages.
+var PackageBundlingInfo = function (pkg, bundle, isTest) {
   var self = this;
   self.pkg = pkg;
   self.bundle = bundle;
+
+  // True if this doesn't actually represent an instance of the
+  // package in a bundle, but rather an instance of its tests in a
+  // bundle.
+  self.isTest = isTest || false;
 
   // list of places we've already been used. map from a 'canonicalized
   // where' to true. 'canonicalized where' is the JSONification of a
@@ -73,12 +87,19 @@ var PackageBundlingInfo = function (pkg, bundle) {
   // XXX this is a mess, refactor
   self.where = {};
 
-  // other packages we've used (with any 'where') -- map from id to package
+  // other packages we've used (with any 'where') -- map from id to
+  // PackageBundlingInfo
   self.using = {};
 
   // map from where (client, server) to a source file name (relative
   // to the package) to true
   self.files = {client: {}, server: {}};
+
+  // input to JavaScript linker. map from where (client, server) to
+  // array of objects with:
+  //  - source: the source code (as a string)
+  //  - servePath: the URL where it would ideally like to be served
+  self.linkerInputs = {client: [], server: []};
 
   // files we depend on -- map from rel_path to true
   self.dependencies = {};
@@ -105,6 +126,9 @@ var PackageBundlingInfo = function (pkg, bundle) {
       });
     },
 
+    // Top-level call to add a source file to a package. It will be
+    // processed according to its extension (eg, *.coffee files will
+    // be compiled to JavaScript.)
     add_files: function (paths, where) {
       if (!(paths instanceof Array))
         paths = paths ? [paths] : [];
@@ -114,6 +138,27 @@ var PackageBundlingInfo = function (pkg, bundle) {
       _.each(where, function (w) {
         _.each(paths, function (rel_path) {
           self.add_file(rel_path, w);
+        });
+      });
+    },
+
+    // Add a JavaScript file as an input to the linker. This is
+    // intended to be called from extension handlers. We will link
+    // these and take responsibility for causing them to be loaded
+    // (eg, adding them to the server load list, adding script tags on
+    // the client.)
+    //
+    // @param source The code. Must be a String.
+    // @param servePath URL where it would prefer to be served, if possible
+    // @param where 'client', 'server', or an array of those
+    addJavaScript: function (source, servePath, where) {
+      if (!(where instanceof Array))
+        where = where ? [where] : [];
+
+      _.each(where, function (w) {
+        self.linkerInputs[w].push({
+          source: source,
+          servePath: servePath
         });
       });
     },
@@ -202,11 +247,86 @@ _.extend(PackageBundlingInfo.prototype, {
     handler(self.bundle.api,
             path.join(self.pkg.source_root, rel_path),
             path.join(self.pkg.serve_root, rel_path),
-            where);
+            where,
+            self.api);
 
     self.dependencies[rel_path] = true;
   }
 });
+
+// Taken an array of PackageBundlingInfo as input. Return an array
+// with the same PackageBundlingInfo, but sorted such that if X
+// depends on (uses) Y in any environment, Y appears before X in the
+// ordering. Raises an exception iff there is no such ordering (due to
+// circular dependency.)
+var loadOrderPbis = function (pbis) {
+  var id = function (pbi) {
+    return pbi.pkg.id + (pbi.isTest ? "T" : "");
+  };
+
+  var ret = [];
+  var done = {};
+  var remaining = {};
+  var onStack = {};
+  _.each(pbis, function (pbi) {
+    remaining[id(pbi)] = pbi;
+  });
+
+  while (true) {
+    // Get an arbitrary package from those that remain, or break if
+    // none remain
+    var first = undefined;
+    for (first in remaining)
+      break;
+    if (first === undefined)
+      break;
+    first = remaining[first];
+
+    // Emit that package and all of its dependencies
+    var load = function (pbi) {
+      if (done[id(pbi)])
+        return;
+
+      _.each(_.values(pbi.using), function (usedPbi) {
+/*
+        // If a package is careless and depends on itself (this has
+        // been the pattern for setting up tests, for some reason I
+        // don't fully remember) then ignore that.
+        if (pbi === usedPbi)
+          return;
+XXX*/
+
+        // Everything has an implicit dependency on "meteor", which
+        // sets up the basic environment (including the *.js handler!)
+        // Unfortunately that includes "underscore" which "meteor"
+        // depends on. This should be refactored one day but as an
+        // expedient temporary solution, force-load "underscore"
+        // before "meteor".
+        //
+        // Similarly, running the tests for "meteor" requires
+        // "tinytest". Of course it only requires that "tinytest" be
+        // present, not that "tinytest" load before "meteor". Resolve
+        // this one manually as well.
+        if ((pbi.pkg.name === "underscore" && usedPbi.pkg.name === "meteor") /*||
+            XXX(pbi.pkg.name === "meteor" && usedPbi.pkg.name === "tinytest")*/)
+          return;
+
+        if (onStack[id(usedPbi)])
+          throw new Error("Circular dependency between packages: " +
+                          pbi.pkg.name + " and " + usedPbi.pkg.name);
+        onStack[usedPbi.pkg.id] = true;
+        load(usedPbi);
+        delete onStack[id(usedPbi)];
+      });
+      ret.push(pbi);
+      done[id(pbi)] = true;
+      delete remaining[id(pbi)];
+    };
+    load(first);
+  }
+
+  return ret;
+};
 
 ///////////////////////////////////////////////////////////////////////////////
 // Bundle
@@ -215,11 +335,13 @@ _.extend(PackageBundlingInfo.prototype, {
 var Bundle = function () {
   var self = this;
 
-  // Packages being used. Map from a package id to a PackageBundlingInfo.
+  // Packages being used. Map from a package id to a
+  // PackageBundlingInfo (with isTest false.)
   self.packageBundlingInfo = {};
 
-  // Packages that have had tests included. Map from package id to instance
-  self.tests_included = {};
+  // Packages that have had tests included. Map from package id to a
+  // PackageBundlingInfo (with isTest true.)
+  self.testBundlingInfo = {};
 
   // app dir. used to find packages in app
   self.appDir = null;
@@ -284,6 +406,8 @@ var Bundle = function () {
     add_resource: function (options) {
       var source_file = options.source_file || options.path;
 
+      console.log("add_resource " + options.type + " " + options.path + " " + options.where);
+
       var data;
       if (options.data) {
         data = options.data;
@@ -310,21 +434,7 @@ var Bundle = function () {
             throw new Error("Must specify path");
 
           if (w === "client" || w === "server") {
-            var wrapped = data;
-            // On the client, wrap each file in a closure, to give it a separate
-            // scope (eg, file-level vars are file-scoped). On the server, this
-            // is done in server/server.js to inject the Npm symbol.
-            //
-            // The ".call(this)" allows you to do a top-level "this.foo = " to
-            // define global variables; this is the only way to do it in
-            // CoffeeScript.
-            if (w === "client") {
-              wrapped = Buffer.concat([
-                new Buffer("(function(){"),
-                data,
-                new Buffer("\n}).call(this);\n")]);
-            }
-            self.files[w][options.path] = wrapped;
+            self.files[w][options.path] = data;
             self.js[w].push(options.path);
           } else {
             throw new Error("Invalid environment");
@@ -419,6 +529,7 @@ _.extend(Bundle.prototype, {
   },
 
   includeTests: function (packageOrPackageName) {
+    console.log("include " + packageOrPackageName);
     var self = this;
     // 'packages.get' is a noop if 'packageOrPackageName' is a Package object.
     var pkg = packages.get(packageOrPackageName, {
@@ -429,11 +540,10 @@ _.extend(Bundle.prototype, {
       console.error("Can't find package " + packageOrPackageName);
       process.exit(1);
     }
-    if (self.tests_included[pkg.id])
+    if (self.testBundlingInfo[pkg.id])
       return;
-    self.tests_included[pkg.id] = true;
-
-    var inst = self._get_bundling_info_for_package(pkg);
+    var inst = new PackageBundlingInfo(pkg, self, true);
+    self.testBundlingInfo[pkg.id] = inst;
 
     // XXX we might want to support npm modules that are only used in
     // tests. one example is stream-buffers as used in the email
@@ -443,8 +553,10 @@ _.extend(Bundle.prototype, {
       self.bundleNodeModules(pkg);
     }
 
-    if (inst.pkg.on_test_handler)
+    if (inst.pkg.on_test_handler) {
+      console.log("call on_test handler " + packageOrPackageName);
       inst.pkg.on_test_handler(inst.api);
+    }
   },
 
   // map a package's generated node_modules directory to the package
@@ -454,6 +566,52 @@ _.extend(Bundle.prototype, {
     // use '/' rather than path.join since this is part of a url
     var relNodeModulesPath = ['packages', pkg.name, 'node_modules'].join('/');
     this.nodeModulesDirs[relNodeModulesPath] = nodeModulesPath;
+  },
+
+  // Take all of the JavaScript inputs we've accumulated in each
+  // package, run the linker to produce the final JavaScript assets,
+  // and insert those final assets into the bundle.
+  link: function () {
+    var self = this;
+
+    _.each(["client", "server"], function (where) {
+      // Sort the packages in dependency order (so that when we
+      // ultimately call add_resource to add them to the bundle, they
+      // end up at the right position in the load order, loading only
+      // after their dependencies)
+      var pbis = _.flatten([
+        _.values(self.packageBundlingInfo),
+        _.values(self.testBundlingInfo)
+      ]);
+      console.log("packages unordered: " + _.map(pbis, function (pbi) {return (pbi.isTest ? "test " : "") + pbi.pkg.name;}).join(", ") );
+      console.log(pbis.length);
+      pbis = loadOrderPbis(pbis);
+      console.log("packages order: " + _.map(pbis, function (pbi) {return (pbi.isTest ? "test " : "") + pbi.pkg.name;}).join(", ") );
+      console.log(pbis.length);
+
+      // Link each package and add the linker output to the bundle
+      _.each(pbis, function (pbi) {
+        var isApp = ! pbi.pkg.name;
+
+        var outputs = linker.link({
+          inputFiles: pbi.linkerInputs[where],
+          useGlobalNamespace: isApp,
+          combinedServePath: isApp ? null :
+            (pbi.isTest ? "/package-tests/" : "/packages/") +
+            pbi.pkg.name + ".js"
+        });
+        pbi.linkerInputs[where] = [];
+
+        _.each(outputs, function (output) {
+          self.api.add_resource({
+            type: "js",
+            where: where,
+            path: output.servePath,
+            data: new Buffer(output.source, 'utf8')
+          });
+        });
+      });
+    });
   },
 
   // Minify the bundle
@@ -826,6 +984,9 @@ exports.bundle = function (app_dir, output_path, options) {
         bundle.includeTests(packageOrPackageName);
       });
     }
+
+    // Run the JavaScript linker to generate final JS assets
+    bundle.link();
 
     // Minify, if requested
     if (!options.noMinify)
