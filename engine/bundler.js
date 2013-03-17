@@ -65,20 +65,21 @@ var ignore_files = [
 //
 // If a package is having its tests run, it will have two distinct
 // PackageBundlingInfo instances, one for the package itself, and one
-// for the tests. This lets us get dependency load order correct. (It
-// lets the tests for package P depend on a package D, such as the
-// test system, that depends on P. This would otherwise be a circular
-// dependency.) In the future, we should probably just model tests as
-// totally separate packages.
-var PackageBundlingInfo = function (pkg, bundle, isTest) {
+// for the tests. These are distinguished by the the "role" attribute.
+// This lets us get dependency load order correct. (It lets the tests
+// for package P depend on a package D, such as the test system, that
+// depends on P. This would otherwise be a circular dependency.) In
+// the future, we should probably just model tests as totally separate
+// packages.
+var PackageBundlingInfo = function (pkg, bundle, role) {
   var self = this;
   self.pkg = pkg;
   self.bundle = bundle;
 
-  // True if this doesn't actually represent an instance of the
-  // package in a bundle, but rather an instance of its tests in a
-  // bundle.
-  self.isTest = isTest || false;
+  // "use" in the normal case (this object represents the instance of
+  // a package in a bundle), or "test" if this instead represents an
+  // instance of the package's tests.
+  self.role = role || "use";
 
   // list of places we've already been used. map from a 'canonicalized
   // where' to true. 'canonicalized where' is the JSONification of a
@@ -357,7 +358,7 @@ _.extend(PackageBundlingInfo.prototype, {
 // dependency.)
 var loadOrderPbis = function (pbis) {
   var id = function (pbi) {
-    return pbi.pkg.id + (pbi.isTest ? "T" : "");
+    return pbi.role + ":" + pbi.pkg.id;
   };
 
   var ret = [];
@@ -413,13 +414,9 @@ var loadOrderPbis = function (pbis) {
 var Bundle = function () {
   var self = this;
 
-  // Packages being used. Map from a package id to a
-  // PackageBundlingInfo (with isTest false.)
-  self.packageBundlingInfo = {};
-
-  // Packages that have had tests included. Map from package id to a
-  // PackageBundlingInfo (with isTest true.)
-  self.testBundlingInfo = {};
+  // Packages being used. Map from a role string (eg, "use" or "test")
+  // to a package id to a PackageBundlingInfo.
+  self.packageBundlingInfo = {use: {}, test: {}};
 
   // app dir. used to find packages in app
   self.appDir = null;
@@ -466,10 +463,10 @@ _.extend(Bundle.prototype, {
   _get_bundling_info_for_package: function (pkg) {
     var self = this;
 
-    var bundlingInfo = self.packageBundlingInfo[pkg.id];
+    var bundlingInfo = self.packageBundlingInfo.use[pkg.id];
     if (!bundlingInfo) {
-      bundlingInfo = new PackageBundlingInfo(pkg, self);
-      self.packageBundlingInfo[pkg.id] = bundlingInfo;
+      bundlingInfo = new PackageBundlingInfo(pkg, self, "use");
+      self.packageBundlingInfo.use[pkg.id] = bundlingInfo;
     }
 
     return bundlingInfo;
@@ -538,10 +535,10 @@ _.extend(Bundle.prototype, {
       console.error("Can't find package " + packageOrPackageName);
       process.exit(1);
     }
-    if (self.testBundlingInfo[pkg.id])
+    if (self.packageBundlingInfo.test[pkg.id])
       return;
-    var inst = new PackageBundlingInfo(pkg, self, true);
-    self.testBundlingInfo[pkg.id] = inst;
+    var inst = new PackageBundlingInfo(pkg, self, "test");
+    self.packageBundlingInfo.test[pkg.id] = inst;
 
     // XXX we might want to support npm modules that are only used in
     // tests. one example is stream-buffers as used in the email
@@ -578,8 +575,8 @@ _.extend(Bundle.prototype, {
       // end up at the right position in the load order, loading only
       // after their dependencies)
       var pbis = _.flatten([
-        _.values(self.packageBundlingInfo),
-        _.values(self.testBundlingInfo)
+        _.values(self.packageBundlingInfo.use),
+        _.values(self.packageBundlingInfo.test)
       ]);
       console.log("packages unordered: " + _.map(pbis, function (pbi) {return (pbi.isTest ? "test " : "") + pbi.pkg.name;}).join(", ") );
       console.log(pbis.length);
@@ -591,12 +588,16 @@ _.extend(Bundle.prototype, {
       _.each(pbis, function (pbi) {
         var isApp = ! pbi.pkg.name;
 
+        var servePathForRole = {
+          use: "/packages/",
+          test: "/package-tests/"
+        };
+
         var outputs = linker.link({
           inputFiles: pbi.linkerInputs[where],
           useGlobalNamespace: isApp,
           combinedServePath: isApp ? null :
-            (pbi.isTest ? "/package-tests/" : "/packages/") +
-            pbi.pkg.name + ".js"
+            servePathForRole[pbi.role] + pbi.pkg.name + ".js"
         });
         pbi.linkerInputs[where] = [];
 
@@ -691,8 +692,8 @@ _.extend(Bundle.prototype, {
     var self = this;
     var exts = {};
 
-    for (var id in self.packageBundlingInfo) {
-      var inst = self.packageBundlingInfo[id];
+    for (var id in self.packageBundlingInfo.use) {
+      var inst = self.packageBundlingInfo.use[id];
       if (!inst.name)
         _.each(inst.api.registered_extensions(), function (ext) {
           exts[ext] = true;
@@ -895,8 +896,8 @@ _.extend(Bundle.prototype, {
     dependencies_json.extensions = self._app_extensions();
     dependencies_json.exclude = _.pluck(ignore_files, 'source');
     dependencies_json.packages = {};
-    for (var id in self.packageBundlingInfo) {
-      var packageBundlingInfo = self.packageBundlingInfo[id];
+    for (var id in self.packageBundlingInfo.use) {
+      var packageBundlingInfo = self.packageBundlingInfo.use[id];
       if (packageBundlingInfo.pkg.name) {
         dependencies_json.packages[packageBundlingInfo.pkg.name] =
             _.keys(packageBundlingInfo.dependencies);
