@@ -149,25 +149,14 @@ Accounts.insertUserDoc = function (options, user) {
   var fullUser;
   if (onCreateUserHook) {
     fullUser = onCreateUserHook(options, user);
-
-///
-/// RESTRICTING WRITES TO USER OBJECTS
-///
-
-Meteor.users.allow({
-  // clients can modify the profile field of their own document, and
-  // nothing else.
-  update: function (userId, user, fields, modifier) {
-    // make sure it is our record
-    if (user._id !== userId)
-      return false;
-
-    // user can only modify the 'profile' field. sets to multiple
-    // sub-keys (eg profile.foo and profile.bar) are merged into entry
-    // in the fields list.
-    if (fields.length !== 1 || fields[0] !== 'profile')
-      return false;
-
+    // This is *not* part of the API. We need this because we can't isolate
+    // the global server environment between tests, meaning we can't test
+    // both having a create user hook set and not having one set.
+    if (fullUser === 'TEST DEFAULT HOOK')
+      fullUser = defaultCreateUserHook(options, user);
+  } else {
+    fullUser = defaultCreateUserHook(options, user);
+  }
   _.each(validateNewUserHooks, function (hook) {
     if (!hook(fullUser))
       throw new Meteor.Error(403, "User validation failed");
