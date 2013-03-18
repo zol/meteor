@@ -2,6 +2,13 @@ var fs = require('fs');
 var uglify = require('uglify-js');
 var _ = require('underscore');
 
+var packageDot = function (name) {
+  if (/^[a-zA-Z0-9]*$/.exec(name))
+    return "Package." + name;
+  else
+    return "Package['" + name + "']";
+};
+
 ///////////////////////////////////////////////////////////////////////////////
 // Module
 ///////////////////////////////////////////////////////////////////////////////
@@ -160,7 +167,7 @@ _.extend(Module.prototype, {
 
     var buf = "/* Exports */\n";
     buf += "if (typeof Package === 'undefined') Package = {};\n";
-    buf += "Package." + self.name + " = ";
+    buf += packageDot(self.name) + " = ";
 
     var exports = self.getExports();
     if (exports.length === 0)
@@ -187,7 +194,7 @@ _.extend(Module.prototype, {
 
     var scratch = {};
     _.each(self.imports, function (name, symbol) {
-      scratch[symbol] = "Package." + name + "." + symbol;
+      scratch[symbol] = packageDot(name) + "." + symbol;
     });
     var imports = buildSymbolTree(scratch);
 
