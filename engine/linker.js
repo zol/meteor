@@ -8,6 +8,13 @@ var _ = require('underscore');
 
 // options include:
 //
+// name: module name or null
+//
+// imports: map from import symbol (string) to module from which it
+// should be imported (string)
+//
+// forceExport: array of additional symbols (strings) to export
+//
 // useGlobalNamespace: make the top level namespace be the same as the
 // global namespace, so that symbols are accessible from the
 // console. typically used when linking apps (as opposed to packages.)
@@ -17,12 +24,19 @@ var _ = require('underscore');
 var Module = function (options) {
   var self = this;
 
+  // module name or null
+  self.name = options.name || null;
+
+  // map from symbol to other module name
+  self.imports = options.imports || {};
+
   // files in the module. array of File
   self.files = [];
 
   // options
   self.useGlobalNamespace = options.useGlobalNamespace;
   self.combinedServePath = options.combinedServePath;
+  self.forceExport = options.forceExport || [];
 };
 
 _.extend(Module.prototype, {
@@ -45,11 +59,52 @@ _.extend(Module.prototype, {
     return _.max(maxInFile);
   },
 
-  // Output is a list of objects with keys 'source' and 'servePath'.
-  link: function () {
+  // Figure out which vars need to be specifically put in the module
+  // scope. This is the globalReferences of any file, minus any
+  // imports.
+  computeModuleScopedVars: function () {
     var self = this;
 
+    // Find all global references in any files
+    var globalReferences = [];
+    _.each(self.files, function (file) {
+      globalReferences = globalReferences.concat(file.computeGlobalReferences());
+    });
+    globalReferences = _.uniq(globalReferences);
+
+    // Find import roots, defined as the first part of each imported
+    // symbol
+    var importRoots = [];
+    _.each(self.imports, function (otherModule, symbol) {
+      var root = symbol.split('.')[0];
+      importRoots.push(root);
+    });
+
+    // XXX XXX we will likely want to do this in a totally different
+    // way once we have a way to get the full path of the global
+    // references (Foo.Bar rather than Foo) out of our source
+    // analysis?
+
+    return _.difference(globalReferences, importRoots);
+  },
+
+  // Output is a list of objects with keys 'source' and 'servePath'.
+  getLinkedFiles: function () {
+    var self = this;
+
+    if (! self.files.length)
+      return [];
+
+    // If we don't want to create a separate scope for this module,
+    // then our job is much simpler. And we can get away with
+    // preserving the line numbers.
     if (self.useGlobalNamespace) {
+
+
+// XXX XXX XXX HERE HERE HERE
+// Generate imports for global namespace
+
+
       return _.map(self.files, function (file) {
         return {
           source: file.getLinkedOutput({ preserveLineNumbers: true }),
@@ -58,55 +113,156 @@ _.extend(Module.prototype, {
       });
     }
 
+    // Otherwise..
+
     // Find the maximum line length. The extra two are for the
     // comments that will be emitted when we skip a unit.
     var sourceWidth = _.max([68, self.maxLineLength()]) + 2;
 
-    // Emit all of the files together in a new scope just for this
-    // module
-    if (! self.useGlobalNamespace) {
-      // Find all global references in any files
-      var globalReferences = [];
-      _.each(self.files, function (file) {
-        globalReferences = globalReferences.concat(file.computeGlobalReferences());
-      });
-      globalReferences = _.uniq(globalReferences);
+    // Figure out which variables are module scope
+    var moduleScopedVars = self.computeModuleScopedVars();
 
-      // Create a closure that captures those references
-      var combined = "(function () {\n\n";
+    // Prologue
+    var combined = "(function () {\n\n";
+    combined += self.getImportCode();
 
-      if (globalReferences.length) {
-        combined += "/* Package-scope variables */\n";
-        combined += "var " + globalReferences.join(', ') + ";\n\n";
-      }
-
-      // Emit each file
-      _.each(self.files, function (file) {
-        combined += file.getLinkedOutput({ sourceWidth: sourceWidth });
-        combined += "\n";
-      });
-
-      // Postlogue
-      combined += "\n}).call(this);";
-
-      // Replace all of the files with this new combined file
-      self.files = [new File(combined, self.combinedServePath, true)];
+    if (moduleScopedVars.length) {
+      combined += "/* Package-scope variables */\n";
+      combined += "var " + moduleScopedVars.join(', ') + ";\n\n";
     }
 
-    return _.map(self.files, function (file) {
-      return {
-        source: file.source,
-        servePath: file.servePath
-      };
+    // Emit each file
+    _.each(self.files, function (file) {
+      combined += file.getLinkedOutput({ sourceWidth: sourceWidth });
+      combined += "\n";
     });
+
+    // Epilogue
+    combined += self.getExportCode();
+    combined += "\n}).call(this);";
+
+    return [{
+      source: combined,
+      servePath: self.combinedServePath
+    }];
+  },
+
+  // Return our exports as a list of string
+  getExports: function () {
+    var self = this;
+    var exports = {};
+
+    _.each(self.files, function (file) {
+      _.each(file.units, function (unit) {
+        _.extend(exports, unit.exports);
+      });
+    });
+
+    return _.union(_.keys(exports), self.forceExport);
+  },
+
+  // Return code that saves our exports to Package.packagename.foo.bar
+  getExportCode: function () {
+    var self = this;
+    if (! self.name)
+      return "";
+    if (self.useGlobalNamespace)
+      // Haven't thought about this case. When would this happen?
+      throw new Error("Not implemented: exports from global namespace");
+
+    var buf = "/* Exports */\n";
+    buf += "if (typeof Package === 'undefined') Package = {};\n";
+    buf += "Package." + self.name + " = ";
+
+    var exports = self.getExports();
+    if (exports.length === 0)
+      return "";
+
+    // Given exports like Foo, Bar.Baz, Bar.Quux.A, and Bar.Quux.B,
+    // construct an expression like
+    // {Foo: Foo, Bar: {Baz: Bar.Baz, Quux: {A: Bar.Quux.A, B: Bar.Quux.B}}}
+    var scratch = {};
+    _.each(self.getExports(), function (symbol) {
+      scratch[symbol] = symbol;
+    });
+    var exports = buildSymbolTree(scratch);
+    buf += writeSymbolTree(exports, 0);
+    buf += ";\n";
+    return buf;
+  },
+
+  getImportCode: function () {
+    var self = this;
+
+    if (_.isEmpty(self.imports))
+      return "";
+
+    var scratch = {};
+    _.each(self.imports, function (name, symbol) {
+      scratch[symbol] = "Package." + name + "." + symbol;
+    });
+    var imports = buildSymbolTree(scratch);
+
+    var buf = "/* Imports */\n";
+    _.each(imports, function (node, key) {
+      buf += "var " + key + " = " + writeSymbolTree(node) + ";\n";
+    });
+
+    // XXX need to remove newlines, whitespace, in line number preserving mode
+    buf += "\n";
+    return buf;
   }
 });
+
+// Given 'symbolMap' like {Foo: 's1', 'Bar.Baz': 's2', 'Bar.Quux.A': 's3', 'Bar.Quux.B': 's4'}
+// return something like
+// {Foo: 's1', Bar: {Baz: 's2', Quux: {A: 's3', B: 's4'}}}
+var buildSymbolTree = function (symbolMap, f) {
+  // XXX XXX detect and report conflicts, like one file exporting
+  // Foo and another file exporting Foo.Bar
+  var ret = {}
+
+  _.each(symbolMap, function (value, symbol) {
+    var parts = symbol.split('.');
+    var lastPart = parts.pop();
+
+    var walk = ret;
+    _.each(parts, function (part) {
+      if (! (part in walk))
+        walk[part] = {};
+      walk = walk[part];
+    });
+    walk[lastPart] = value;
+  });
+
+  return ret;
+};
+
+// Given something like {Foo: 's1', Bar: {Baz: 's2', Quux: {A: 's3', B: 's4'}}}
+// construct a string like {Foo: s1, Bar: {Baz: s2, Quux: {A: s3, B: s4}}}
+// except with pretty indentation.
+var writeSymbolTree = function (symbolTree, indent) {
+  var put = function (node, indent) {
+    if (typeof node === "string") {
+      return node;
+    }
+    var spacing = new Array(indent + 1).join(' ');
+    // XXX prettyprint!
+    return "{\n" +
+      _.map(node, function (value, key) {
+        return spacing + "  " + key + ": " + put(value, indent + 2);
+      }).join(',\n') + "\n" + spacing + "}";
+  };
+
+  return put(symbolTree, indent || 0);
+};
+
 
 ///////////////////////////////////////////////////////////////////////////////
 // File
 ///////////////////////////////////////////////////////////////////////////////
 
-var File = function (source, servePath, skipUnitize) {
+var File = function (source, servePath) {
   var self = this;
 
   // source code for this file (a string)
@@ -119,8 +275,7 @@ var File = function (source, servePath, skipUnitize) {
   // the source of each unit, in order, will give self.source.
   self.units = [];
 
-  if (! skipUnitize)
-    self._unitize();
+  self._unitize();
 };
 
 _.extend(File.prototype, {
@@ -144,6 +299,8 @@ _.extend(File.prototype, {
   // - sourceWidth: width in columns to use for the source code
   getLinkedOutput: function (options) {
     var self = this;
+
+    // XXX XXX if a unit is not going to be used, prepend each line with '//'
 
     // The newline after the source closes a '//' comment.
     //
@@ -226,7 +383,8 @@ _.extend(File.prototype, {
         });
 
         _.each(symbols, function (s) {
-          unit[what][s] = true;
+          if (s.length)
+            unit[what + "s"][s] = true;
         });
 
         /* fall through */
@@ -264,10 +422,10 @@ var Unit = function (name, mandatory) {
   // symbols mentioned in @export, @require, @provide, or @weak
   // directives. each is a map from the symbol (given as a string) to
   // true.
-  self.export = {};
-  self.require = {};
-  self.provide = {};
-  self.weak = {};
+  self.exports = {};
+  self.requires = {};
+  self.provides = {};
+  self.weaks = {};
 };
 
 _.extend(Unit.prototype, {
@@ -294,7 +452,7 @@ _.extend(Unit.prototype, {
     // exception and writes warnings to the console! that's clearly
     // not going to fly.
 
-    globalReferences = [];
+    var globalReferences = [];
     _.each(toplevel.enclosed, function (symbol) {
       if (symbol.undeclared && ! (symbol.name in blacklist))
         globalReferences.push(symbol.name);
@@ -310,9 +468,20 @@ _.extend(Unit.prototype, {
 
 // options include:
 //
+// name: the name of this module (for stashing exports to be later
+// read by the imports of other modules); null if the module has no
+// name (in that case exports will not work properly)
+//
+// imports: symbols to import. map from symbol name (something like
+// 'Foo', "Foo.bar", etc) to the module from which it should be
+// imported (which must load before us at runtime)
+//
 // inputFiles: an array of objects representing input files.
 //  - source: the source code
 //  - servePath: the path where it would prefer to be served if possible
+//
+// forceExport: an array of symbols (as dotted strings) to force the
+// module to export, even if it wouldn't otherwise
 //
 // useGlobalNamespace: make the top level namespace be the same as the
 // global namespace, so that symbols are accessible from the
@@ -321,22 +490,29 @@ _.extend(Unit.prototype, {
 // combinedServePath: if we end up combining all of the files into
 // one, use this as the servePath.
 //
-// Output is an array of output files in the same format as
-// 'inputFiles'.
+// Output is an object with keys:
+// - files: is an array of output files in the same format as inputFiles
+// - exports: the exports, as a list of string ('Foo', 'Thing.Stuff', etc)
 var link = function (options) {
   var module = new Module({
+    name: options.name,
+    imports: options.imports,
+    forceExport: options.forceExport,
     useGlobalNamespace: options.useGlobalNamespace,
     combinedServePath: options.combinedServePath
   });
-
-  if (! options.inputFiles.length)
-    return [];
 
   _.each(options.inputFiles, function (f) {
     module.addFile(f.source, f.servePath);
   });
 
-  return module.link();
+  var files = module.getLinkedFiles();
+  var exports = module.getExports();
+
+  return {
+    files: files,
+    exports: exports
+  };
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -552,6 +728,9 @@ var blacklistedSymbols = [
 
   // We're going to need 'arguments'
   "arguments",
+
+  // This is how we do imports and exports
+  "Package",
 
   // Meteor provides these at runtime
   "Npm", "__meteor_runtime_config__", "__meteor_bootstrap__",

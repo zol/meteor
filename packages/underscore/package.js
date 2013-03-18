@@ -13,5 +13,7 @@ Package.on_use(function (api, where) {
   // practical and expedient solution.
   api.use('meteor', where, {unordered: true});
 
+  api.exportSymbol('_', where);
+
   api.add_files('underscore.js', where);
 });

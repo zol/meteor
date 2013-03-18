@@ -119,6 +119,16 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   // minification or linking purposes.)
   self.resources = {client: [], server: []};
 
+  // All symbols exported from the JavaScript code in this package
+  // instance. Map from where ("client", "server") to list of string
+  // (where string is "Foo", "Bar.baz", ...)
+  self.exports = {client: [], server: []};
+
+  // Symbols that the package author has specifically asked to export,
+  // even if they don't appear in export directives. Same format as
+  // self.exports.
+  self.forceExport = {client: [], server: []};
+
   // files we depend on -- map from rel_path to true
   self.dependencies = {};
   if (pkg.name)
@@ -132,21 +142,22 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
     //
     // options can include:
     //
-    // - unordered: if true, don't require this package to load before
-    //   us -- just require it to be loaded anytime. If false,
-    //   override a true value specified in a previous call to use for
-    //   this package pain. (A limitation of the current
-    //   implementation is that this flag is not tracked
-    //   per-environment or per-role.) Can be used to resolve circular
-    //   dependencies in exceptional circumstances, eg, the 'meteor'
-    //   package depends on 'handlebars', but all packages (including
-    //   'handlebars') have an implicit dependency on
-    //   'meteor'. Internal use only -- future support of this is not
-    //   guaranteed. #UnorderedPackageReferences
-    //
     // - role: defaults to "use", but you could pass something like
     //   "test" if for some reason you wanted to include a package's
     //   tests
+    //
+    // - unordered: if true, don't require this package to load before
+    //   us -- just require it to be loaded anytime. Also don't bring
+    //   this package's imports into our namespace. If false, override
+    //   a true value specified in a previous call to use for this
+    //   package name. (A limitation of the current implementation is
+    //   that this flag is not tracked per-environment or per-role.)
+    //   This option can be used to resolve circular dependencies in
+    //   exceptional circumstances, eg, the 'meteor' package depends
+    //   on 'handlebars', but all packages (including 'handlebars')
+    //   have an implicit dependency on 'meteor'. Internal use only --
+    //   future support of this is not
+    //   guaranteed. #UnorderedPackageReferences
     use: function (names, where, options) {
       options = _.clone(options || {});
 
@@ -184,6 +195,8 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
     // @param source The code. Must be a String.
     // @param servePath URL where it would prefer to be served, if possible
     // @param where 'client', 'server', or an array of those
+    //
+    // XXX XXX remove this function. shuold be just the same as add_resource
     addJavaScript: function (source, servePath, where) {
       if (!(where instanceof Array))
         where = where ? [where] : [];
@@ -194,6 +207,26 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
           data: new Buffer(source, 'utf8'),
           servePath: servePath
         });
+      });
+    },
+
+    // Force the export of a symbol from this package. An alternative
+    // to using @export directives. Possibly helpful when you don't
+    // want to modify the source code of a third party library.
+    //
+    // @param symbols String (eg "Foo", "Foo.bar") or array of String
+    // @param where 'client', 'server', or an array of those
+    exportSymbol: function (symbols, where) {
+      if (!(symbols instanceof Array))
+        symbols = symbols ? [symbols] : [];
+      if (!(where instanceof Array))
+        where = where ? [where] : [];
+
+      _.each(where, function (w) {
+        _.each(symbols, function (s) {
+          self.forceExport[w].push(s);
+        });
+        self.forceExport[w] = _.uniq(self.forceExport[w]);
       });
     },
 
@@ -562,51 +595,82 @@ _.extend(Bundle.prototype, {
   },
 
   // Run the linker over the JavaScript assets that have accumulated
-  // in each package.
+  // in each package. Transforms JavaScript assets to JavaScript
+  // assets, and computes the exports of each package.
   link: function () {
     var self = this;
 
-    // For each role, for each package, for each environment
-    _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
-      _.each(_.values(idToPbiMap), function (pbi) {
-        _.each(_.keys(pbi.resources), function (where) {
-          var isApp = ! pbi.pkg.name;
+    // We must do this in dependency order because we compute the
+    // exports as we go. In the future, hopefully we put packages
+    // though a build step during which we compute their exports and
+    // the export list becomes static package metadata so that we
+    // don't have to do this.
+    var pbis = self._pbisByLoadOrder();
 
-          // Pull out the JavaScript files
-          var inputs = [];
-          var others = [];
-          _.each(pbi.resources[where], function (resource) {
-            if (resource.type === "js") {
-              inputs.push({
-                source: resource.data.toString('utf8'),
-                servePath: resource.servePath
+    // For each role, for each package, for each environment
+    _.each(pbis, function (pbi) {
+      _.each(_.keys(pbi.resources), function (where) {
+        var isApp = ! pbi.pkg.name;
+
+        // Compute imports by merging the exports of all of the
+        // packages we use. To be eligible to supply an import, a
+        // pbi must presently (a) be named (the app can't supply
+        // exports, at least for now); (b) have the "use" role (you
+        // can't import symbols from tests and such, primarily
+        // because we don't have a good way to name non-"use" roles
+        // in JavaScript.) Note that in the case of conflicting
+        // symbols, later packages get precedence.
+        var imports = {}; // map from symbol to supplying package name
+        _.each(_.values(pbi.using), function (idToPbiMap) {
+          _.each(_.values(idToPbiMap), function (otherPbi) {
+            if (! pbi.unordered[otherPbi.pkg.id]) {
+              _.each(otherPbi.exports[where], function (symbol) {
+                imports[symbol] = otherPbi.pkg.name;
               });
-            } else {
-              others.push(resource);
             }
           });
-          pbi.resources[where] = others;
+        });
 
-          // Run the link
-          var servePathForRole = {
-            use: "/packages/",
-            test: "/package-tests/"
-          };
-
-          var outputs = linker.link({
-            inputFiles: inputs,
-            useGlobalNamespace: isApp,
-            combinedServePath: isApp ? null :
-              servePathForRole[pbi.role] + pbi.pkg.name + ".js"
-          });
-
-          // Add each output as a resource
-          _.each(outputs, function (output) {
-            pbi.resources[where].push({
-              type: "js",
-              data: new Buffer(output.source, 'utf8'),
-              servePath: output.servePath,
+        // Pull out the JavaScript files
+        var inputs = [];
+        var others = [];
+        _.each(pbi.resources[where], function (resource) {
+          if (resource.type === "js") {
+            inputs.push({
+              source: resource.data.toString('utf8'),
+              servePath: resource.servePath
             });
+          } else {
+            others.push(resource);
+          }
+        });
+        pbi.resources[where] = others;
+
+        // Run the link
+        var servePathForRole = {
+          use: "/packages/",
+          test: "/package-tests/"
+        };
+
+        var results = linker.link({
+          inputFiles: inputs,
+          useGlobalNamespace: isApp,
+          combinedServePath: isApp ? null :
+            servePathForRole[pbi.role] + pbi.pkg.name + ".js",
+          imports: imports,
+          name: pbi.pkg.name || null,
+          forceExport: pbi.forceExport[where]
+        });
+
+        // Save exports for use by future imports
+        pbi.exports[where] = results.exports;
+
+        // Add each output as a resource
+        _.each(results.files, function (outputFile) {
+          pbi.resources[where].push({
+            type: "js",
+            data: new Buffer(outputFile.source, 'utf8'),
+              servePath: outputFile.servePath,
           });
         });
       });
