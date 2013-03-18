@@ -94,9 +94,10 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   self.using = {use: {}, test: {}};
   self.unordered = {};
 
-  // map from where (client, server) to a source file name (relative
-  // to the package) to true
-  self.files = {client: {}, server: {}};
+  // Tracks which source files have already been added, so we don't
+  // add them again. Map from where (client, server) to a source file
+  // name (relative to the package) to true
+  self.sourceFileAdded = {client: {}, server: {}};
 
   // input to JavaScript linker. map from where (client, server) to
   // array of objects with:
@@ -323,9 +324,9 @@ _.extend(PackageBundlingInfo.prototype, {
   add_file: function (rel_path, where) {
     var self = this;
 
-    if (self.files[where][rel_path])
+    if (self.sourceFileAdded[where][rel_path])
       return;
-    self.files[where][rel_path] = true;
+    self.sourceFileAdded[where][rel_path] = true;
 
     var ext = path.extname(rel_path).substr(1);
     var handler = self.get_source_handler(ext);
