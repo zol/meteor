@@ -2,26 +2,165 @@ var fs = require('fs');
 var uglify = require('uglify-js');
 var _ = require('underscore');
 
-// Options:
-// - preserveLineNumbers: if true, decorate minimally so that line
-//   numbers don't change between input and output
-// - path: a (cosmetic) path to print in the header. the first
-//   character will be stripped, on the assumption that it's '/'
-// - sourceWidth: width in columns to use for the source code
-var wrapFile = function (source, options) {
-  // The newline after the source closes a '//' comment.
-  //
-  // The ".call(this)" allows you to do a top-level "this.foo = " to
-  // define global variables; this is the only way to do it in
-  // CoffeeScript.
+///////////////////////////////////////////////////////////////////////////////
+// Module
+///////////////////////////////////////////////////////////////////////////////
 
-  if (options.preserveLineNumbers) {
-    return "(function(){" + source + "\n}).call(this);\n";
-  } else {
-    var ret = "";
+// options include:
+//
+// useGlobalNamespace: make the top level namespace be the same as the
+// global namespace, so that symbols are accessible from the
+// console. typically used when linking apps (as opposed to packages.)
+//
+// combinedServePath: if we end up combining all of the files into
+// one, use this as the servePath.
+var Module = function (options) {
+  var self = this;
+
+  // files in the module. array of File
+  self.files = [];
+
+  // options
+  self.useGlobalNamespace = options.useGlobalNamespace;
+  self.combinedServePath = options.combinedServePath;
+};
+
+_.extend(Module.prototype, {
+  // source: the source code
+  // servePath: the path where it would prefer to be served if possible
+  addFile: function (source, servePath) {
+    var self = this;
+    self.files.push(new File(source, servePath));
+  },
+
+  maxLineLength: function () {
+    var self = this;
+
+    var maxInFile = [];
+    _.each(self.files, function (file) {
+      var lines = file.source.split('\n');
+      maxInFile.push(_.max(_.pluck(lines, "length")));
+    });
+
+    return _.max(maxInFile);
+  },
+
+  // Output is a list of objects with keys 'source' and 'servePath'.
+  link: function () {
+    var self = this;
+
+    if (self.useGlobalNamespace) {
+      return _.map(self.files, function (file) {
+        return {
+          source: file.getLinkedOutput({ preserveLineNumbers: true }),
+          servePath: file.servePath
+        }
+      });
+    }
+
+    // Find the maximum line length. The extra two are for the
+    // comments that will be emitted when we skip a unit.
+    var sourceWidth = _.max([68, self.maxLineLength()]) + 2;
+
+    // Emit all of the files together in a new scope just for this
+    // module
+    if (! self.useGlobalNamespace) {
+      // Find all global references in any files
+      var globalReferences = [];
+      _.each(self.files, function (file) {
+        globalReferences = globalReferences.concat(file.computeGlobalReferences());
+      });
+      globalReferences = _.uniq(globalReferences);
+
+      // Create a closure that captures those references
+      var combined = "(function () {\n\n";
+
+      if (globalReferences.length) {
+        combined += "/* Package-scope variables */\n";
+        combined += "var " + globalReferences.join(', ') + ";\n\n";
+      }
+
+      // Emit each file
+      _.each(self.files, function (file) {
+        combined += file.getLinkedOutput({ sourceWidth: sourceWidth });
+        combined += "\n";
+      });
+
+      // Postlogue
+      combined += "\n}).call(this);";
+
+      // Replace all of the files with this new combined file
+      self.files = [new File(combined, self.combinedServePath, true)];
+    }
+
+    return _.map(self.files, function (file) {
+      return {
+        source: file.source,
+        servePath: file.servePath
+      };
+    });
+  }
+});
+
+///////////////////////////////////////////////////////////////////////////////
+// File
+///////////////////////////////////////////////////////////////////////////////
+
+var File = function (source, servePath, skipUnitize) {
+  var self = this;
+
+  // source code for this file (a string)
+  self.source = source;
+
+  // the path where this file would prefer to be served if possible
+  self.servePath = servePath;
+
+  // The individual @units in the file. Array of Unit. Concatenating
+  // the source of each unit, in order, will give self.source.
+  self.units = [];
+
+  if (! skipUnitize)
+    self._unitize();
+};
+
+_.extend(File.prototype, {
+  // Return the union of the global references in all of the units in
+  // this file that we are actually planning to use. Array of string.
+  computeGlobalReferences: function () {
+    var self = this;
+
+    var globalReferences = [];
+    _.each(self.units, function (unit) {
+      if (unit.include)
+        globalReferences = globalReferences.concat(unit.computeGlobalReferences());
+    });
+    return globalReferences;
+  },
+
+  // Options:
+  // - preserveLineNumbers: if true, decorate minimally so that line
+  //   numbers don't change between input and output. In this case,
+  //   sourceWidth is ignored.
+  // - sourceWidth: width in columns to use for the source code
+  getLinkedOutput: function (options) {
+    var self = this;
+
+    // The newline after the source closes a '//' comment.
+    //
+    // The ".call(this)" allows you to do a top-level "this.foo = " to
+    // define global variables; this is the only way to do it in
+    // CoffeeScript.
+
+    if (options.preserveLineNumbers) {
+      // Ugly version
+      return "(function(){" + self.source + "\n}).call(this);\n";
+    }
+
+    // Pretty version
+    var buf = "";
 
     // Prologue
-    ret += "(function () {\n\n";
+    buf += "(function () {\n\n";
 
     // Banner
     var width = options.sourceWidth || 70;
@@ -30,72 +169,144 @@ var wrapFile = function (source, options) {
     var spacer = "// " + new Array(bannerWidth - 6 + 1).join(' ') + " //\n";
     var padding = new Array(bannerWidth + 1).join(' ');
     var blankLine = new Array(width + 1).join(' ') + " //\n";
-    ret += divider + spacer;
-    ret += "// " + (options.path.slice(1) + padding).slice(0, bannerWidth - 6) +
+    buf += divider + spacer;
+    buf += "// " + (self.servePath.slice(1) + padding).slice(0, bannerWidth - 6) +
       " //\n";
-    ret += spacer + divider + blankLine;
+    buf += spacer + divider + blankLine;
 
     // Code, with line numbers
     // You might prefer your line numbers at the beginning of the
     // line, with /* .. */. Well, that requires parsing the source for
     // comments, because you have to do something different if you're
     // already inside a comment.
-    var lines = source.split('\n');
+    var lines = self.source.split('\n');
     var num = 1;
     _.each(lines, function (line) {
-      ret += (line + padding).slice(0, width) + " // " + num + "\n";
+      buf += (line + padding).slice(0, width) + " // " + num + "\n";
       num++;
     });
 
     // Footer
-    ret += divider;
+    buf += divider;
 
     // Epilogue
-    ret += "\n}).call(this);\n\n\n\n\n\n"
-    return ret;
+    buf += "\n}).call(this);\n\n\n\n\n\n"
+    return buf;
+  },
+
+  // Split file and populate self.units
+  // XXX it is an error to declare a @unit not at toplevel (eg, inside a
+  // function or object..) We don't detect this but we might have to to
+  // give an acceptable user experience..
+  _unitize: function () {
+    var self = this;
+    var lines = self.source.split("\n");
+    var buf = "";
+    var unit = new Unit(null, true);
+    self.units.push(unit);
+
+    var firstLine = true;
+    _.each(lines, function (line) {
+      // XXX overly permissive. should detect errors
+      var match = /^\s*\/\/\s*@unit(\s+([^\s]+))?/.exec(line);
+      if (match) {
+        unit.source = buf;
+        buf = line;
+        unit = new Unit(match[2] || null, false);
+        self.units.push(unit);
+        return;
+      }
+
+      // XXX overly permissive. should detect errors
+      match = /^\s*\/\/\s*@(export|require|provide|weak)(\s+.*)$/.exec(line);
+      if (match) {
+        var what = match[1];
+        var symbols = _.map(match[2].split(/,/), function (s) {
+          return s.replace(/^\s+|\s+$/g, ''); // trim leading/trailing whitespace
+        });
+
+        _.each(symbols, function (s) {
+          unit[what][s] = true;
+        });
+
+        /* fall through */
+      }
+
+      if (firstLine)
+        firstLine = false;
+      else
+        buf += "\n";
+      buf += line;
+    });
+    unit.source = buf;
   }
+});
+
+///////////////////////////////////////////////////////////////////////////////
+// Unit
+///////////////////////////////////////////////////////////////////////////////
+
+var Unit = function (name, mandatory) {
+  var self = this;
+
+  // name of the unit, or null if none provided
+  self.name = name;
+
+  // source code for this unit (a string)
+  self.source = null;
+
+  // true if this unit is to always be included
+  self.mandatory = !! mandatory;
+
+  // true if we should include this unit in the linked output
+  self.include = self.mandatory;
+
+  // symbols mentioned in @export, @require, @provide, or @weak
+  // directives. each is a map from the symbol (given as a string) to
+  // true.
+  self.export = {};
+  self.require = {};
+  self.provide = {};
+  self.weak = {};
 };
 
-// file should have a 'source' attribute. Compute the global
-// references and assign them to the 'globalReferences' attribute of
-// file, as a map from the name of the global to true. However, if
-// file already has such an attribute, do nothing.
-//
-// For example: if the code references 'Foo.bar.baz' and 'Quux', and
-// neither are declared in a scope enclosing the point where they're
-// referenced, then globalReferences would incude {Foo: true, Quux:
-// true}.
-var computeGlobalReferences = function (file) {
-  var toplevel = uglify.parse(file.source); // instanceof uglify.AST_Toplevel
-  toplevel.figure_out_scope();
+_.extend(Unit.prototype, {
+  // Return the globals in unit file as an array of symbol names.  For
+  // example: if the code references 'Foo.bar.baz' and 'Quux', and
+  // neither are declared in a scope enclosing the point where they're
+  // referenced, then globalReferences would include ["Foo", "Quux"].
+  computeGlobalReferences: function () {
+    var self = this;
 
-  // XXX Use Uglify for now. Uglify is pretty good at returning us a
-  // list of symbols that are referenced but not defined, but not good
-  // at all at helping us figure out which of those are assigned to
-  // rather than just referenced. Without the assignments, we have to
-  // maintain an explicit list of symbols that we expect to be
-  // declared in the browser, which is super bogus! Use jsparse
-  // instead or maybe acorn, and rewrite uglify's scope analysis code
-  // (it can't be that hard.)
+    var toplevel = uglify.parse(self.source); // instanceof uglify.AST_Toplevel
+    toplevel.figure_out_scope();
 
-  file.globalReferences = {};
-  _.each(toplevel.enclosed, function (symbol) {
-    if (symbol.undeclared && ! (symbol.name in blacklist))
-      file.globalReferences[symbol.name] = true;
-  });
+    // XXX Use Uglify for now. Uglify is pretty good at returning us a
+    // list of symbols that are referenced but not defined, but not
+    // good at all at helping us figure out which of those are
+    // assigned to rather than just referenced. Without the
+    // assignments, we have to maintain an explicit list of symbols
+    // that we expect to be declared in the browser, which is super
+    // bogus! Use jsparse instead or maybe acorn, and rewrite uglify's
+    // scope analysis code (it can't be that hard.)
 
-  console.log(_.keys(file.globalReferences))
-};
+    // XXX XXX as configured, on parse error, uglify throws an
+    // exception and writes warnings to the console! that's clearly
+    // not going to fly.
 
-var maxLineLengthInFiles = function (files) {
-  var maxInFile = [];
-  _.each(files, function (file) {
-    var lines = file.source.split('\n');
-    maxInFile.push(_.max(_.pluck(lines, "length")));
-  });
+    globalReferences = [];
+    _.each(toplevel.enclosed, function (symbol) {
+      if (symbol.undeclared && ! (symbol.name in blacklist))
+        globalReferences.push(symbol.name);
+    });
 
-  return _.max(maxInFile);
-};
+    return globalReferences;
+  }
+});
+
+///////////////////////////////////////////////////////////////////////////////
+// Top-level entry point
+///////////////////////////////////////////////////////////////////////////////
 
 // options include:
 //
@@ -113,59 +324,23 @@ var maxLineLengthInFiles = function (files) {
 // Output is an array of output files in the same format as
 // 'inputFiles'.
 var link = function (options) {
-  var files = _.map(options.inputFiles, _.clone);
-
-  if (! files.length)
-    return [];
-
-  // Find the maximum line length
-  var sourceWidth = _.max([70, maxLineLengthInFiles(files)]);
-
-  // Wrap each file in its own namespace
-  _.each(files, function (file) {
-    file.source = wrapFile(file.source, {
-      path: file.servePath,
-      preserveLineNumbers: options.useGlobalNamespace,
-      sourceWidth: sourceWidth
-    });
+  var module = new Module({
+    useGlobalNamespace: options.useGlobalNamespace,
+    combinedServePath: options.combinedServePath
   });
 
-  // If not using the global namespace, create a second namespace that
-  // all of the files share
-  if (! options.useGlobalNamespace) {
-    // Find all global references in any files
-    var globalReferences = {};
-    _.each(files, function (file) {
-      computeGlobalReferences(file);
-      _.extend(globalReferences, file.globalReferences);
-    });
+  if (! options.inputFiles.length)
+    return [];
 
-    // Create a closure that captures those references
-    var combined = "(function () {\n\n";
+  _.each(options.inputFiles, function (f) {
+    module.addFile(f.source, f.servePath);
+  });
 
-    if (_.keys(globalReferences).length) {
-      combined += "/* Package-scope variables */\n";
-      combined += "var " + _.keys(globalReferences).join(', ') + ";\n\n";
-    }
-
-    // Emit each file
-    _.each(files, function (file) {
-      combined += file.source;
-      combined += "\n";
-    });
-
-    // Postlogue
-    combined += "\n}).call(this);";
-
-    // Replace all of the files with this new combined file
-    files = [{
-      servePath: options.combinedServePath,
-      source: combined
-    }];
-  }
-
-  return files;
+  return module.link();
 };
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
 
 // From Chome. Open a console on an empty tab and call:
 //   Object.getOwnPropertyNames(this).join('", "')
