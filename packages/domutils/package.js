@@ -12,6 +12,8 @@ Package.on_use(function (api) {
   // cut this dependency.
   api.use('jquery', 'client');
 
+  api.use('underscore', 'client');
+
   api.add_files('domutils.js', 'client');
 });
 

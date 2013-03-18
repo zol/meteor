@@ -89,7 +89,7 @@ _.extend(Module.prototype, {
     // preserving the line numbers.
     if (self.useGlobalNamespace) {
       var ret = _.isEmpty(self.imports) ? [] : [{
-        source: self.getImportCode("/* Imports for global scope */\n\n"),
+        source: self.getImportCode("/* Imports for global scope */\n\n", true),
         servePath: self.importStubServePath
       }];
 
@@ -179,7 +179,7 @@ _.extend(Module.prototype, {
     return buf;
   },
 
-  getImportCode: function (header) {
+  getImportCode: function (header, omitVar) {
     var self = this;
 
     if (_.isEmpty(self.imports))
@@ -193,7 +193,8 @@ _.extend(Module.prototype, {
 
     var buf = header;
     _.each(imports, function (node, key) {
-      buf += "var " + key + " = " + writeSymbolTree(node) + ";\n";
+      buf += (omitVar ? "" : "var " ) +
+        key + " = " + writeSymbolTree(node) + ";\n";
     });
 
     // XXX need to remove newlines, whitespace, in line number preserving mode
