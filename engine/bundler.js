@@ -122,7 +122,7 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
     //   override a true value specified in a previous call to use for
     //   this package pain. (A limitation of the current
     //   implementation is that this flag is not tracked
-    //   per-environment.) Can be used to resolve circular
+    //   per-environment or per-role.) Can be used to resolve circular
     //   dependencies in exceptional circumstances, eg, the 'meteor'
     //   package depends on 'handlebars', but all packages (including
     //   'handlebars') have an implicit dependency on
@@ -186,10 +186,11 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
     registered_extensions: function () {
       var ret = _.keys(self.pkg.extensions);
 
-      for (var id in self.using.use) {
-        var other_inst = self.using.use[id];
-        ret = _.union(ret, _.keys(other_inst.pkg.extensions));
-      }
+      _.each(self.using, function (idToPbiMap) {
+        _.each(idToPbiMap, function (otherPbi) {
+          ret = _.union(ret, _.keys(otherPbi.pkg.extensions));
+        });
+      });
 
       return _.map(ret, function (x) {return "." + x;});
     },
@@ -295,12 +296,13 @@ _.extend(PackageBundlingInfo.prototype, {
     if (extension in self.pkg.extensions)
       candidates.push(self.pkg.extensions[extension]);
 
-    for (var id in self.using.use) {
-      var other_inst = self.using.use[id];
-      var other_pkg = other_inst.pkg;
-      if (extension in other_pkg.extensions)
-        candidates.push(other_pkg.extensions[extension]);
-    }
+    _.each(self.using, function (idToPbiMap) {
+      _.each(idToPbiMap, function (otherPbi) {
+        var otherPkg = otherPbi.pkg;
+        if (extension in otherPkg.extensions)
+          candidates.push(otherPkg.extensions[extension]);
+      });
+    });
 
     // XXX do something more graceful than printing a stack trace and
     // exiting!! we have higher standards than that!
@@ -570,13 +572,13 @@ _.extend(Bundle.prototype, {
       // ultimately call add_resource to add them to the bundle, they
       // end up at the right position in the load order, loading only
       // after their dependencies)
-      var pbis = _.flatten([
-        _.values(self.packageBundlingInfo.use),
-        _.values(self.packageBundlingInfo.test)
-      ]);
-      console.log("packages unordered: " + _.map(pbis, function (pbi) {return (pbi.isTest ? "test " : "") + pbi.pkg.name;}).join(", ") );
+      var pbis = [];
+      _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
+        pbis = pbis.concat(_.values(idToPbiMap));
+      });
+      console.log("packages unordered: " + _.map(pbis, function (pbi) {return pbi.role + " " + pbi.pkg.name;}).join(", ") );
       pbis = loadOrderPbis(pbis);
-      console.log("packages order: " + _.map(pbis, function (pbi) {return (pbi.isTest ? "test " : "") + pbi.pkg.name;}).join(", ") );
+      console.log("packages order: " + _.map(pbis, function (pbi) {return pbi.role + " " + pbi.pkg.name;}).join(", ") );
 
       // Link each package and add the linker output to the bundle
       _.each(pbis, function (pbi) {
@@ -684,17 +686,16 @@ _.extend(Bundle.prototype, {
   // any. Kind of a hack.
   _app_extensions: function () {
     var self = this;
-    var exts = {};
+    var ret = [];
 
-    for (var id in self.packageBundlingInfo.use) {
-      var inst = self.packageBundlingInfo.use[id];
-      if (!inst.name)
-        _.each(inst.api.registered_extensions(), function (ext) {
-          exts[ext] = true;
-        });
-    }
+    _.each(self.packageBundlingInfo, function (idToPbiMap) {
+      _.each(idToPbiMap, function (pbi) {
+        if (! pbi.pkg.name)
+          ret = _.union(ret, pbi.api.registered_extensions());
+      });
+    });
 
-    return _.keys(exts);
+    return ret;
   },
 
   // nodeModulesMode should be "skip", "symlink", or "copy"
@@ -763,7 +764,7 @@ _.extend(Bundle.prototype, {
         hash: self._hash(contents)
       });
     };
-        
+
     if (is_app) {
       if (fs.existsSync(path.join(project_dir, 'public'))) {
         var copied =
@@ -890,13 +891,21 @@ _.extend(Bundle.prototype, {
     dependencies_json.extensions = self._app_extensions();
     dependencies_json.exclude = _.pluck(ignore_files, 'source');
     dependencies_json.packages = {};
-    for (var id in self.packageBundlingInfo.use) {
-      var packageBundlingInfo = self.packageBundlingInfo.use[id];
-      if (packageBundlingInfo.pkg.name) {
-        dependencies_json.packages[packageBundlingInfo.pkg.name] =
-            _.keys(packageBundlingInfo.dependencies);
-      }
-    }
+    _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
+      _.each(_.values(idToPbiMap), function (pbi) {
+        if (pbi.pkg.name) {
+          // merge the dependencies in _.keys(pbi.dependencies) with
+          // anything that might already be in
+          // dependencies_json.packages[pbi.pkg.name] from other roles
+          var relpaths = {};
+          _.each(dependencies_json.packages[pbi.pkg.name] || [], function (p) {
+            relpaths[p] = true;
+          });
+          _.extend(relpaths, pbi.dependencies);
+          dependencies_json.packages[pbi.pkg.name] = _.keys(relpaths);
+        }
+      });
+    });
 
     if (self.release && self.release !== 'none')
       app_json.release = self.release;
