@@ -657,6 +657,8 @@ _.extend(Bundle.prototype, {
           useGlobalNamespace: isApp,
           combinedServePath: isApp ? null :
             servePathForRole[pbi.role] + pbi.pkg.name + ".js",
+          // XXX report an error if there is a package called global-imports
+          importStubServePath: '/packages/global-imports.js',
           imports: imports,
           name: pbi.pkg.name || null,
           forceExport: pbi.forceExport[where]

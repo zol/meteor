@@ -6,21 +6,9 @@ var _ = require('underscore');
 // Module
 ///////////////////////////////////////////////////////////////////////////////
 
-// options include:
-//
-// name: module name or null
-//
-// imports: map from import symbol (string) to module from which it
-// should be imported (string)
-//
-// forceExport: array of additional symbols (strings) to export
-//
-// useGlobalNamespace: make the top level namespace be the same as the
-// global namespace, so that symbols are accessible from the
-// console. typically used when linking apps (as opposed to packages.)
-//
-// combinedServePath: if we end up combining all of the files into
-// one, use this as the servePath.
+// options include name, imports, forceExport, useGlobalNamespace,
+// combinedServePath, and importStubServePath, all of which have the
+// same meaning as they do when passed to import().
 var Module = function (options) {
   var self = this;
 
@@ -34,9 +22,10 @@ var Module = function (options) {
   self.files = [];
 
   // options
+  self.forceExport = options.forceExport || [];
   self.useGlobalNamespace = options.useGlobalNamespace;
   self.combinedServePath = options.combinedServePath;
-  self.forceExport = options.forceExport || [];
+  self.importStubServePath = options.importStubServePath;
 };
 
 _.extend(Module.prototype, {
@@ -99,18 +88,17 @@ _.extend(Module.prototype, {
     // then our job is much simpler. And we can get away with
     // preserving the line numbers.
     if (self.useGlobalNamespace) {
+      var ret = _.isEmpty(self.imports) ? [] : [{
+        source: self.getImportCode("/* Imports for global scope */\n\n"),
+        servePath: self.importStubServePath
+      }];
 
-
-// XXX XXX XXX HERE HERE HERE
-// Generate imports for global namespace
-
-
-      return _.map(self.files, function (file) {
+      return ret.concat(_.map(self.files, function (file) {
         return {
           source: file.getLinkedOutput({ preserveLineNumbers: true }),
           servePath: file.servePath
         }
-      });
+      }));
     }
 
     // Otherwise..
@@ -124,7 +112,7 @@ _.extend(Module.prototype, {
 
     // Prologue
     var combined = "(function () {\n\n";
-    combined += self.getImportCode();
+    combined += self.getImportCode("/* Imports */\n");
 
     if (moduleScopedVars.length) {
       combined += "/* Package-scope variables */\n";
@@ -191,7 +179,7 @@ _.extend(Module.prototype, {
     return buf;
   },
 
-  getImportCode: function () {
+  getImportCode: function (header) {
     var self = this;
 
     if (_.isEmpty(self.imports))
@@ -203,7 +191,7 @@ _.extend(Module.prototype, {
     });
     var imports = buildSymbolTree(scratch);
 
-    var buf = "/* Imports */\n";
+    var buf = header;
     _.each(imports, function (node, key) {
       buf += "var " + key + " = " + writeSymbolTree(node) + ";\n";
     });
@@ -490,6 +478,11 @@ _.extend(Unit.prototype, {
 // combinedServePath: if we end up combining all of the files into
 // one, use this as the servePath.
 //
+// importStubServePath: if useGlobalNamespace is true, then to
+// preserve line numbers, we may want to emit an additional file
+// containing import setup code for the global environment. this is
+// the servePath to use for it.
+//
 // Output is an object with keys:
 // - files: is an array of output files in the same format as inputFiles
 // - exports: the exports, as a list of string ('Foo', 'Thing.Stuff', etc)
@@ -499,6 +492,7 @@ var link = function (options) {
     imports: options.imports,
     forceExport: options.forceExport,
     useGlobalNamespace: options.useGlobalNamespace,
+    importStubServePath: options.importStubServePath,
     combinedServePath: options.combinedServePath
   });
 
