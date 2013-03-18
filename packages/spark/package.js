@@ -5,7 +5,7 @@ Package.describe({
 
 Package.on_use(function (api) {
   api.use(['underscore', 'random', 'domutils', 'liverange', 'universal-events',
-           'ordered-dict'],
+           'ordered-dict', 'deps'],
           'client');
 
   api.add_files(['spark.js', 'patch.js', 'convenience.js',

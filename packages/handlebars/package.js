@@ -10,6 +10,7 @@ Package.describe({
 Package._require('parse.js'); // needed at bundle time
 
 Package.on_use(function (api) {
+  api.use('spark', 'client');
   // XXX should only be sent if we have handlebars templates in the app..
   api.add_files('evaluate.js', 'client');
   api.add_files('parse.js', 'server'); // needed on server for tests
