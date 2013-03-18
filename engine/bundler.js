@@ -95,15 +95,29 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   self.unordered = {};
 
   // Tracks which source files have already been added, so we don't
-  // add them again. Map from where (client, server) to a source file
-  // name (relative to the package) to true
+  // add them again. Map from where ("client", "server") to a source
+  // file name (relative to the package) to true
   self.sourceFileAdded = {client: {}, server: {}};
 
-  // input to JavaScript linker. map from where (client, server) to
-  // array of objects with:
-  //  - source: the source code (as a string)
-  //  - servePath: the URL where it would ideally like to be served
-  self.linkerInputs = {client: [], server: []};
+  // All of the data provided by this package for eventual inclusion
+  // in the bundle. Map from where ("client", "server") to a list of
+  // objects each with these keys:
+  //
+  // type: "js", "css", "head", "body", "static"
+  //
+  // data: The contents of this resource, as a Buffer. For example,
+  // for "head", the data to insert in <head>; for "js", the
+  // JavaScript source code (which may be subject to further
+  // processing such as minification or linking as we move through the
+  // build process); for "static", the contents of a static resource
+  // such as an image.
+  //
+  // servePath: The (absolute) path at which the resource would prefer
+  // to be served. Interpretation varies by type. For example, always
+  // honored for "static", ignored for "head" and "body", sometimes
+  // honored for JavaScript but ignored if we are concatenating (for
+  // minification or linking purposes.)
+  self.resources = {client: [], server: []};
 
   // files we depend on -- map from rel_path to true
   self.dependencies = {};
@@ -175,8 +189,9 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
         where = where ? [where] : [];
 
       _.each(where, function (w) {
-        self.linkerInputs[w].push({
-          source: source,
+        self.resources[w].push({
+          type: "js",
+          data: new Buffer(source, 'utf8'),
           servePath: servePath
         });
       });
@@ -209,8 +224,7 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
      * type: "js", "css", "head", "body", "static"
      *
      * where: an environment, or a list of one or more environments
-     * ("client", "server", "tests") -- for non-JS resources, the only
-     * legal environment is "client"
+     * ("client", "server")
      *
      * path: the (absolute) path at which the file will be
      * served. ignored in the case of "head" and "body".
@@ -223,8 +237,6 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
      */
     add_resource: function (options) {
       var source_file = options.source_file || options.path;
-
-      console.log("add_resource " + options.type + " " + options.path + " " + options.where);
 
       var data;
       if (options.data) {
@@ -243,40 +255,15 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
       var where = options.where;
       if (typeof where === "string")
         where = [where];
-      if (!where)
+      if (! where)
         throw new Error("Must specify where");
 
       _.each(where, function (w) {
-        if (options.type === "js") {
-          if (!options.path)
-            throw new Error("Must specify path");
-
-          if (w === "client" || w === "server") {
-            self.bundle.files[w][options.path] = data;
-            self.bundle.js[w].push(options.path);
-          } else {
-            throw new Error("Invalid environment");
-          }
-        } else if (options.type === "css") {
-          if (w !== "client")
-            // XXX might be nice to throw an error here, but then we'd
-            // have to make it so that packages.js ignores css files
-            // that appear in the server directories in an app tree
-            return;
-          if (!options.path)
-            throw new Error("Must specify path");
-          self.bundle.files.client[options.path] = data;
-          self.bundle.css.push(options.path);
-        } else if (options.type === "head" || options.type === "body") {
-          if (w !== "client")
-            throw new Error("HTML segments can only go to the client");
-          self.bundle[options.type].push(data);
-        } else if (options.type === "static") {
-          self.bundle.files[w][options.path] = data;
-          self.bundle.static[w].push(options.path);
-        } else {
-          throw new Error("Unknown type " + options.type);
-        }
+        self.resources[w].push({
+          type: options.type,
+          data: data,
+          servePath: options.path
+        });
       });
     }
   };
@@ -330,7 +317,7 @@ _.extend(PackageBundlingInfo.prototype, {
 
     var ext = path.extname(rel_path).substr(1);
     var handler = self.get_source_handler(ext);
-    if (!handler) {
+    if (! handler) {
       // If we don't have an extension handler, serve this file
       // as a static resource.
       self.api.add_resource({
@@ -562,49 +549,105 @@ _.extend(Bundle.prototype, {
     this.nodeModulesDirs[relNodeModulesPath] = nodeModulesPath;
   },
 
-  // Take all of the JavaScript inputs we've accumulated in each
-  // package, run the linker to produce the final JavaScript assets,
-  // and insert those final assets into the bundle.
+  // Run the linker over the JavaScript assets that have accumulated
+  // in each package.
   link: function () {
     var self = this;
 
-    _.each(["client", "server"], function (where) {
-      // Sort the packages in dependency order (so that when we
-      // ultimately call add_resource to add them to the bundle, they
-      // end up at the right position in the load order, loading only
-      // after their dependencies)
-      var pbis = [];
-      _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
-        pbis = pbis.concat(_.values(idToPbiMap));
-      });
-      console.log("packages unordered: " + _.map(pbis, function (pbi) {return pbi.role + " " + pbi.pkg.name;}).join(", ") );
-      pbis = loadOrderPbis(pbis);
-      console.log("packages order: " + _.map(pbis, function (pbi) {return pbi.role + " " + pbi.pkg.name;}).join(", ") );
+    // For each role, for each package, for each environment
+    _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
+      _.each(_.values(idToPbiMap), function (pbi) {
+        _.each(_.keys(pbi.resources), function (where) {
+          var isApp = ! pbi.pkg.name;
 
-      // Link each package and add the linker output to the bundle
-      _.each(pbis, function (pbi) {
-        var isApp = ! pbi.pkg.name;
-
-        var servePathForRole = {
-          use: "/packages/",
-          test: "/package-tests/"
-        };
-
-        var outputs = linker.link({
-          inputFiles: pbi.linkerInputs[where],
-          useGlobalNamespace: isApp,
-          combinedServePath: isApp ? null :
-            servePathForRole[pbi.role] + pbi.pkg.name + ".js"
-        });
-        pbi.linkerInputs[where] = [];
-
-        _.each(outputs, function (output) {
-          pbi.api.add_resource({
-            type: "js",
-            where: where,
-            path: output.servePath,
-            data: new Buffer(output.source, 'utf8')
+          // Pull out the JavaScript files
+          var inputs = [];
+          var others = [];
+          _.each(pbi.resources[where], function (resource) {
+            if (resource.type === "js") {
+              inputs.push({
+                source: resource.data.toString('utf8'),
+                servePath: resource.servePath
+              });
+            } else {
+              others.push(resource);
+            }
           });
+          pbi.resources[where] = others;
+
+          // Run the link
+          var servePathForRole = {
+            use: "/packages/",
+            test: "/package-tests/"
+          };
+
+          var outputs = linker.link({
+            inputFiles: inputs,
+            useGlobalNamespace: isApp,
+            combinedServePath: isApp ? null :
+              servePathForRole[pbi.role] + pbi.pkg.name + ".js"
+          });
+
+          // Add each output as a resource
+          _.each(outputs, function (output) {
+            pbi.resources[where].push({
+              type: "js",
+              data: new Buffer(output.source, 'utf8'),
+              servePath: output.servePath,
+            });
+          });
+        });
+      });
+    });
+  },
+
+  // Sort the packages in dependency order, then, package by package,
+  // write their resources into the bundle.
+  addPackageResourcesToBundle: function () {
+    var self = this;
+
+    // Compute dependency order across all PackageBundlingInfos (of
+    // all roles.)
+    var pbis = [];
+    _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
+      pbis = pbis.concat(_.values(idToPbiMap));
+    });
+    console.log("packages unordered: " + _.map(pbis, function (pbi) {return pbi.role + " " + pbi.pkg.name;}).join(", ") );
+    pbis = loadOrderPbis(pbis);
+    console.log("packages order: " + _.map(pbis, function (pbi) {return pbi.role + " " + pbi.pkg.name;}).join(", ") );
+
+    // Copy their resources into the bundle in order
+    _.each(pbis, function (pbi) {
+      _.each(pbi.resources, function (resources, where) {
+        _.each(resources, function (resource) {
+
+          if (resource.type === "js") {
+            if (where !== "client" && where !== "server")
+              throw new Error("Invalid environment");
+            self.files[where][resource.servePath] = resource.data;
+            self.js[where].push(resource.servePath);
+          } else if (resource.type === "css") {
+            if (where !== "client")
+              // XXX might be nice to throw an error here, but then we'd
+              // have to make it so that packages.js ignores css files
+              // that appear in the server directories in an app tree
+
+              // XXX XXX can't we easily do that in the css handler in
+              // meteor.js?
+              return;
+
+            self.files[where][resource.servePath] = resource.data;
+            self.css.push(resource.servePath);
+          } else if (resource.type === "static") {
+            self.files[where][resource.servePath] = resource.data;
+            self.static[where].push(resource.servePath);
+          } else if (resource.type === "head" || resource.type === "body") {
+            if (where !== "client")
+              throw new Error("HTML segments can only go to the client");
+            self[resource.type].push(resource.data);
+          } else {
+            throw new Error("Unknown type " + resource.type);
+          }
         });
       });
     });
@@ -983,13 +1026,16 @@ exports.bundle = function (app_dir, output_path, options) {
 
     // Include tests if requested
     if (options.testPackages) {
-      _.each(options.testPackages, function(packageOrPackageName) {
+      _.each(options.testPackages, function (packageOrPackageName) {
         bundle.use(packageOrPackageName, null, {role: "test"});
       });
     }
 
-    // Run the JavaScript linker to generate final JS assets
+    // Process JavaScript through the linker
     bundle.link();
+
+    // Put resources in load order and copy them to the bundle
+    bundle.addPackageResourcesToBundle();
 
     // Minify, if requested
     if (!options.noMinify)
