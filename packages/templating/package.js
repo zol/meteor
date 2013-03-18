@@ -67,7 +67,12 @@ Package.register_extension(
       var basename = path.basename(serve_path, ext);
       serve_path = path_part + "template." + basename + ".js";
 
-      bundle.addJavaScript(results.js, serve_path, where);
+      bundle.add_resource({
+        type: "js",
+        where: where,
+        path: serve_path,
+        data: results.js
+      });
     }
   }
 );

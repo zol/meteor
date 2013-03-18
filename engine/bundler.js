@@ -186,30 +186,6 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
       });
     },
 
-    // Add a JavaScript file as an input to the linker. This is
-    // intended to be called from extension handlers. We will link
-    // these and take responsibility for causing them to be loaded
-    // (eg, adding them to the server load list, adding script tags on
-    // the client.)
-    //
-    // @param source The code. Must be a String.
-    // @param servePath URL where it would prefer to be served, if possible
-    // @param where 'client', 'server', or an array of those
-    //
-    // XXX XXX remove this function. shuold be just the same as add_resource
-    addJavaScript: function (source, servePath, where) {
-      if (!(where instanceof Array))
-        where = where ? [where] : [];
-
-      _.each(where, function (w) {
-        self.resources[w].push({
-          type: "js",
-          data: new Buffer(source, 'utf8'),
-          servePath: servePath
-        });
-      });
-    },
-
     // Force the export of a symbol from this package. An alternative
     // to using @export directives. Possibly helpful when you don't
     // want to modify the source code of a third party library.
