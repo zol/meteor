@@ -144,7 +144,7 @@ var link = function (options) {
     var combined = "(function () {\n\n";
 
     if (_.keys(globalReferences).length) {
-      combined += "/* Package globals */\n";
+      combined += "/* Package-scope variables */\n";
       combined += "var " + _.keys(globalReferences).join(', ') + ";\n\n";
     }
 
@@ -155,7 +155,7 @@ var link = function (options) {
     });
 
     // Postlogue
-    combined += "\n})();";
+    combined += "\n}).call(this);";
 
     // Replace all of the files with this new combined file
     files = [{

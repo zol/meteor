@@ -338,65 +338,6 @@ _.extend(PackageBundlingInfo.prototype, {
   }
 });
 
-// Taken an array of PackageBundlingInfo as input. Return an array
-// with the same PackageBundlingInfo, but sorted such that if X
-// depends on (uses) Y in any environment, and that relationship is
-// not marked as unordered, Y appears before X in the ordering. Raises
-// an exception iff there is no such ordering (due to circular
-// dependency.)
-var loadOrderPbis = function (pbis) {
-  var id = function (pbi) {
-    return pbi.role + ":" + pbi.pkg.id;
-  };
-
-  var ret = [];
-  var done = {};
-  var remaining = {};
-  var onStack = {};
-  _.each(pbis, function (pbi) {
-    remaining[id(pbi)] = pbi;
-  });
-
-  while (true) {
-    // Get an arbitrary package from those that remain, or break if
-    // none remain
-    var first = undefined;
-    for (first in remaining)
-      break;
-    if (first === undefined)
-      break;
-    first = remaining[first];
-
-    // Emit that package and all of its dependencies
-    var load = function (pbi) {
-      if (done[id(pbi)])
-        return;
-
-      _.each(_.values(pbi.using), function (idToPbiMap) { // roles
-        _.each(_.values(idToPbiMap), function (usedPbi) {
-          if (pbi.unordered[usedPbi.pkg.id])
-            return;
-
-          if (onStack[id(usedPbi)])
-            // XXX should not throw an exception, resulting in a nasty
-            // stack trace! should gracefully print a message!
-            throw new Error("Circular dependency between packages: " +
-                            pbi.pkg.name + " and " + usedPbi.pkg.name);
-          onStack[usedPbi.pkg.id] = true;
-          load(usedPbi);
-          delete onStack[id(usedPbi)];
-        });
-      });
-      ret.push(pbi);
-      done[id(pbi)] = true;
-      delete remaining[id(pbi)];
-    };
-    load(first);
-  }
-
-  return ret;
-};
-
 ///////////////////////////////////////////////////////////////////////////////
 // Bundle
 ///////////////////////////////////////////////////////////////////////////////
@@ -466,6 +407,77 @@ _.extend(Bundle.prototype, {
     var hash = crypto.createHash('sha1');
     hash.update(contents);
     return hash.digest('hex');
+  },
+
+  // Return all PackageBundlingInfos in this bundle, sorted into load
+  // order.
+  _pbisByLoadOrder: function () {
+    var self = this;
+
+    // Taken an array of PackageBundlingInfo as input. Return an array
+    // with the same PackageBundlingInfo, but sorted such that if X
+    // depends on (uses) Y in any environment, and that relationship is
+    // not marked as unordered, Y appears before X in the ordering. Raises
+    // an exception iff there is no such ordering (due to circular
+    // dependency.)
+    var loadOrderPbis = function (pbis) {
+      var id = function (pbi) {
+        return pbi.role + ":" + pbi.pkg.id;
+      };
+
+      var ret = [];
+      var done = {};
+      var remaining = {};
+      var onStack = {};
+      _.each(pbis, function (pbi) {
+        remaining[id(pbi)] = pbi;
+      });
+
+      while (true) {
+        // Get an arbitrary package from those that remain, or break if
+        // none remain
+        var first = undefined;
+        for (first in remaining)
+          break;
+        if (first === undefined)
+          break;
+        first = remaining[first];
+
+        // Emit that package and all of its dependencies
+        var load = function (pbi) {
+          if (done[id(pbi)])
+            return;
+
+          _.each(_.values(pbi.using), function (idToPbiMap) { // roles
+            _.each(_.values(idToPbiMap), function (usedPbi) {
+              if (pbi.unordered[usedPbi.pkg.id])
+                return;
+
+              if (onStack[id(usedPbi)]) {
+                console.error("Circular dependency between packages: " +
+                              pbi.pkg.name + " and " + usedPbi.pkg.name);
+                process.exit(1);
+              }
+              onStack[usedPbi.pkg.id] = true;
+              load(usedPbi);
+              delete onStack[id(usedPbi)];
+            });
+          });
+          ret.push(pbi);
+          done[id(pbi)] = true;
+          delete remaining[id(pbi)];
+        };
+        load(first);
+      }
+
+      return ret;
+    };
+
+    var pbis = [];
+    _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
+      pbis = pbis.concat(_.values(idToPbiMap));
+    });
+    return loadOrderPbis(pbis);
   },
 
   // Call to add a package to this bundle. The first argument may be
@@ -608,11 +620,7 @@ _.extend(Bundle.prototype, {
 
     // Compute dependency order across all PackageBundlingInfos (of
     // all roles.)
-    var pbis = [];
-    _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
-      pbis = pbis.concat(_.values(idToPbiMap));
-    });
-    pbis = loadOrderPbis(pbis);
+    var pbis = self._pbisByLoadOrder();
 
     // Copy their resources into the bundle in order
     _.each(pbis, function (pbi) {
