@@ -612,9 +612,7 @@ _.extend(Bundle.prototype, {
     _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
       pbis = pbis.concat(_.values(idToPbiMap));
     });
-    console.log("packages unordered: " + _.map(pbis, function (pbi) {return pbi.role + " " + pbi.pkg.name;}).join(", ") );
     pbis = loadOrderPbis(pbis);
-    console.log("packages order: " + _.map(pbis, function (pbi) {return pbi.role + " " + pbi.pkg.name;}).join(", ") );
 
     // Copy their resources into the bundle in order
     _.each(pbis, function (pbi) {
