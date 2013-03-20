@@ -40,26 +40,23 @@ var Package = function () {
   // registered source file handlers
   self.extensions = {};
 
-  // packages used. map from role to where to array of objects with keys:
-  // - name: "mypackage"
-  // - role: "use" or "test"
-  // - where: "client", "server", or "unspecified"
-  // - unordered: exclude from topological sort
-  self.uses = {use: {client: [], server: [], unspecified: []},
-               test: {client: [], server: [], unspecified: []}};
+  // packages used. map from role to where to array of package name (string.)
+  self.uses = {use: {client: [], server: []},
+               test: {client: [], server: []}};
 
-  // source files used. map from role to where to array of objects with keys:
-  // - path: path to file in project
-  // - where: "client" or "server" (not "unspecified")
-  self.sources = {use: {client: [], server: [], unspecified: []},
-                  test: {client: [], server: [], unspecified: []}};
+  // packages dependencies against which we are unordered (we don't
+  // mind if they load after us, as long as they load.) map from
+  // package name to true.
+  self.unordered = {};
 
-  // exported symbols. map from role to where to array of objects with keys:
-  // - path: path to file in project
-  // - where: "client" or "server" (not "unspecified")
+  // source files used. map from role to where to array of string path.
+  self.sources = {use: {client: [], server: []},
+                  test: {client: [], server: []}};
+
+  // exported symbols. map from role to where to array of string symbol.
   // Only includes explictly exported symbols for now, not @export comments.
-  self.exports = {use: {client: [], server: [], unspecified: []},
-                  test: {client: [], server: [], unspecified: []}};
+  self.exports = {use: {client: [], server: []},
+                  test: {client: [], server: []}};
 
   // functions that can be called when the package is scanned --
   // visible as `Package` when package.js is executed
@@ -174,90 +171,77 @@ _.extend(Package.prototype, {
     var func = require('vm').runInThisContext(wrapped, fullpath, true);
     func(self.packageFacade, self.npmFacade);
 
-    // packages used. map from role to where to array of objects with keys:
-    // - name: "mypackage"
-    // - role: "use" or "test"
-    // - where: "client", "server", or "unspecified"
-    // - unordered: exclude from topological sort
-    var uses = {use: {client: [], server: [], unspecified: []},
-                test: {client: [], server: [], unspecified: []}};
-
-    // source files used. map from role to where to array of objects with keys:
-    // - path: path to file in project
-    // - where: "client" or "server" (not "unspecified")
-    var sources = {use: {client: [], server: [], unspecified: []},
-                   test: {client: [], server: [], unspecified: []}};
-
-    // exported symbols. map from role to where to array of objects with keys:
-    // - path: path to file in project
-    // - where: "client" or "server" (not "unspecified")
-    // Only includes explictly exported symbols for now, not @export comments.
-    var exports = {use: {client: [], server: [], unspecified: []},
-                   test: {client: [], server: [], unspecified: []}};
-
+    // For this old-style, on_use/on_test/where-based package, figure
+    // out its dependencies by calling its on_xxx functions and seeing
+    // what it does.
+    //
+    // We have a simple strategy. Call its on_xxx handler with no
+    // 'where', which is what happens when the package is added
+    // directly to an app, and see what files it adds to the client
+    // and the server. Call the former the client version of the
+    // package, and the latter the server version. Then, when a
+    // package is used, include it in both the client and the server
+    // by default. This simple strategy doesn't capture even 10% of
+    // the complexity possible with on_use, on_test, and where, but
+    // probably is sufficient for virtually all packages that actually
+    // exist in the field, if not every single one.
     _.each(["use", "test"], function (role) {
       if (self.roleHandlers[role]) {
-        _.each(["client", "server", "unspecified"], function (whereFromName) {
-          var whereFrom = whereFromName === "unspecified" ? undefined : whereFromName;
+        self.roleHandlers[role]({
+          use: function (names, where, options) {
+            options = options || {};
 
-          self.roleHandlers[role]({
-            use: function (names, whereToNames, options) {
-              options = options || {};
+            if (!(names instanceof Array))
+              names = names ? [names] : [];
 
-              if (!(names instanceof Array))
-                names = names ? [names] : [];
+            if (!(where instanceof Array))
+              where = where ? [where] : ["client", "server"];
 
-              if (!(whereToNames instanceof Array))
-                whereToNames = whereToNames ? [whereToNames] : ["unspecified"];
-
-              _.each(names, function (name) {
-                _.each(whereToNames, function (whereToName) {
-                  uses[role][whereFromName].push({name: name,
-                                                  role: options.role || "use",
-                                                  where: whereToName,
-                                                  unordered: options.unordered});
-                });
+            _.each(names, function (name) {
+              _.each(where, function (w) {
+                if (options.role && options.role !== "use")
+                  throw new Error("Role override is no longer supported");
+                self.uses[role][w].push(name);
+                if (options.unordered)
+                  self.unordered[name] = true;
               });
-            },
-            add_files: function (paths, whereToNames) {
-              if (!(paths instanceof Array))
-                paths = paths ? [paths] : [];
+            });
+          },
+          add_files: function (paths, where) {
+            if (!(paths instanceof Array))
+              paths = paths ? [paths] : [];
 
-              if (!(whereToNames instanceof Array))
-                whereToNames = whereToNames ? [whereToNames] : [];
+            if (!(where instanceof Array))
+              where = where ? [where] : [];
 
-              _.each(paths, function (path) {
-                _.each(whereToNames, function (whereToName) {
-                  sources[role][whereFromName].push({path: path,
-                                                     where: whereToName});
-                });
+            _.each(paths, function (path) {
+              _.each(where, function (w) {
+                self.sources[role][w].push(path);
               });
-            },
-            exportSymbol: function (symbols, whereToNames) {
-              if (!(symbols instanceof Array))
-                symbols = symbols ? [symbols] : [];
+            });
+          },
+          exportSymbol: function (symbols, where) {
+            if (!(symbols instanceof Array))
+              symbols = symbols ? [symbols] : [];
 
-              if (!(whereToNames instanceof Array))
-                whereToNames = whereToNames ? [whereToNames] : [];
+            if (!(where instanceof Array))
+              where = where ? [where] : [];
 
-              _.each(symbols, function (symbol) {
-                _.each(whereToNames, function (whereToName) {
-                  exports[role][whereFromName].push({symbol: symbol,
-                                                     where: whereToName});
-                });
+            _.each(symbols, function (symbol) {
+              _.each(where, function (w) {
+                self.exports[role][w].push(symbol);
               });
-            },
-            error: function () {
-              throw new Error("api.error(), ironically, is no longer supported");
-            },
-            registered_extensions: function () {
-              throw new Error("api.registered_extensions() is no longer supported");
-            }
-          }, whereFrom);
+            });
+          },
+          error: function () {
+            throw new Error("api.error(), ironically, is no longer supported");
+          },
+          registered_extensions: function () {
+            throw new Error("api.registered_extensions() is no longer supported");
+          }
         });
       }
     });
-    console.log(self.name + " => " + JSON.stringify(uses));
   },
 
   // @returns {Boolean} was the package found in the app's packages/
