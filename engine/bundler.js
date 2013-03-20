@@ -211,10 +211,8 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
     registered_extensions: function () {
       var ret = _.keys(self.pkg.extensions);
 
-      _.each(self.using, function (idToPbiMap) {
-        _.each(idToPbiMap, function (otherPbi) {
-          ret = _.union(ret, _.keys(otherPbi.pkg.extensions));
-        });
+      _.each(self.using.use, function (otherPbi) {
+        ret = _.union(ret, _.keys(otherPbi.pkg.extensions));
       });
 
       return _.map(ret, function (x) {return "." + x;});
@@ -277,7 +275,7 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
     }
   };
 
-  if (pkg.name !== "meteor")
+  if (! (pkg.name === "meteor" && self.role === "use"))
     self.api.use("meteor");
 };
 
@@ -290,15 +288,13 @@ _.extend(PackageBundlingInfo.prototype, {
     var self = this;
     var candidates = [];
 
-    if (extension in self.pkg.extensions)
+    if (self.role === "use" && extension in self.pkg.extensions)
       candidates.push(self.pkg.extensions[extension]);
 
-    _.each(self.using, function (idToPbiMap) {
-      _.each(idToPbiMap, function (otherPbi) {
-        var otherPkg = otherPbi.pkg;
-        if (extension in otherPkg.extensions)
-          candidates.push(otherPkg.extensions[extension]);
-      });
+    _.each(self.using.use, function (otherPbi) {
+      var otherPkg = otherPbi.pkg;
+      if (extension in otherPkg.extensions)
+        candidates.push(otherPkg.extensions[extension]);
     });
 
     // XXX do something more graceful than printing a stack trace and
@@ -463,11 +459,11 @@ _.extend(Bundle.prototype, {
                 return;
 
               if (onStack[id(usedPbi)]) {
-                console.error("Circular dependency between packages: " +
+                console.error("fatal: circular dependency between packages " +
                               pbi.pkg.name + " and " + usedPbi.pkg.name);
                 process.exit(1);
               }
-              onStack[usedPbi.pkg.id] = true;
+              onStack[id(usedPbi)] = true;
               load(usedPbi);
               delete onStack[id(usedPbi)];
             });

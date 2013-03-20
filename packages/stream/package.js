@@ -19,5 +19,7 @@ Package.on_test(function (api) {
   api.use('stream', ['client', 'server']);
   api.use('http', 'client');
   api.use('test-helpers', 'client');
+  api.use('tinytest');
+  api.use('underscore');
   api.add_files(['stream_tests.js'], 'client');
 });

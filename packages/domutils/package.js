@@ -19,7 +19,7 @@ Package.on_use(function (api) {
 
 Package.on_test(function (api) {
   api.use(['tinytest']);
-  api.use(['domutils', 'test-helpers'], 'client');
+  api.use(['domutils', 'test-helpers', 'underscore'], 'client');
 
   api.add_files([
     'domutils_tests.js'

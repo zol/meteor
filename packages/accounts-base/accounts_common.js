@@ -1,5 +1,5 @@
+// @export Accounts
 if (typeof Accounts === 'undefined')
-  // @export Accounts
   Accounts = {};
 
 if (!Accounts._options) {

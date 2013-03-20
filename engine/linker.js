@@ -43,13 +43,18 @@ _.extend(Module.prototype, {
     self.files.push(new File(source, servePath));
   },
 
-  maxLineLength: function () {
+
+  maxLineLength: function (ignoreOver) {
     var self = this;
 
     var maxInFile = [];
     _.each(self.files, function (file) {
-      var lines = file.source.split('\n');
-      maxInFile.push(_.max(_.pluck(lines, "length")));
+      var m = 0;
+      _.each(file.source.split('\n'), function (line) {
+        if (line.length <= ignoreOver && line.length > m)
+          m = line.length;
+      });
+      maxInFile.push(m);
     });
 
     return _.max(maxInFile);
@@ -112,7 +117,7 @@ _.extend(Module.prototype, {
 
     // Find the maximum line length. The extra two are for the
     // comments that will be emitted when we skip a unit.
-    var sourceWidth = _.max([68, self.maxLineLength()]) + 2;
+    var sourceWidth = _.max([68, self.maxLineLength(120 - 2)]) + 2;
 
     // Figure out which variables are module scope
     var moduleScopedVars = self.computeModuleScopedVars();
@@ -335,7 +340,10 @@ _.extend(File.prototype, {
     var lines = self.source.split('\n');
     var num = 1;
     _.each(lines, function (line) {
-      buf += (line + padding).slice(0, width) + " // " + num + "\n";
+      if (line.length > width)
+        buf += line + "\n";
+      else
+        buf += (line + padding).slice(0, width) + " // " + num + "\n";
       num++;
     });
 
@@ -741,6 +749,9 @@ var blacklistedSymbols = [
   // environment to bootstrap __meteor_runtime_config__, though
   // probably we should find a better way to do that)
   "process",
+
+  // Another node global
+  "Buffer",
 
   // These are used by sockjs. (XXX before this
   // goes out the door, it needs to switch to detecting assignment

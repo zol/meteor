@@ -12,6 +12,9 @@ Package.on_use(function (api) {
 });
 
 Package.on_test(function (api) {
+  api.use('tinytest');
+  api.use('random');
+  api.use('accounts-base');
   api.use('accounts-oauth2-helper', 'server');
   api.add_files("oauth2_tests.js", 'server');
 });

@@ -9,6 +9,6 @@ Package.on_use(function (api) {
 });
 
 Package.on_test(function (api) {
-  api.use('routepolicy', 'server');
+  api.use(['routepolicy', 'tinytest']);
   api.add_files(['routepolicy_tests.js'], 'server');
 });

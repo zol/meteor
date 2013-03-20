@@ -80,7 +80,10 @@ Package.register_extension(
 Package.on_test(function (api) {
   api.use('tinytest');
   api.use('htmljs');
-  api.use(['test-helpers', 'domutils', 'session'], 'client');
+  api.use('templating');
+  api.use('handlebars');
+  api.use(['test-helpers', 'domutils', 'session', 'deps',
+           'underscore', 'spark', 'minimongo'], 'client');
   api.use('handlebars', 'server');
   api.add_files([
     'templating_tests.js',

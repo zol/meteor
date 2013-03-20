@@ -10,6 +10,7 @@ Package.on_use(function (api) {
   api.use('past');
 
   api.use('underscore', ['client', 'server']);
+  api.use('random', ['client', 'server']);
 
   api.add_files('tinytest.js', ['client', 'server']);
 
