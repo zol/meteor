@@ -40,6 +40,27 @@ var Package = function () {
   // registered source file handlers
   self.extensions = {};
 
+  // packages used. map from role to where to array of objects with keys:
+  // - name: "mypackage"
+  // - role: "use" or "test"
+  // - where: "client", "server", or "unspecified"
+  // - unordered: exclude from topological sort
+  self.uses = {use: {client: [], server: [], unspecified: []},
+               test: {client: [], server: [], unspecified: []}};
+
+  // source files used. map from role to where to array of objects with keys:
+  // - path: path to file in project
+  // - where: "client" or "server" (not "unspecified")
+  self.sources = {use: {client: [], server: [], unspecified: []},
+                  test: {client: [], server: [], unspecified: []}};
+
+  // exported symbols. map from role to where to array of objects with keys:
+  // - path: path to file in project
+  // - where: "client" or "server" (not "unspecified")
+  // Only includes explictly exported symbols for now, not @export comments.
+  self.exports = {use: {client: [], server: [], unspecified: []},
+                  test: {client: [], server: [], unspecified: []}};
+
   // functions that can be called when the package is scanned --
   // visible as `Package` when package.js is executed
   self.packageFacade = {
@@ -152,6 +173,91 @@ _.extend(Package.prototype, {
     // steer clear
     var func = require('vm').runInThisContext(wrapped, fullpath, true);
     func(self.packageFacade, self.npmFacade);
+
+    // packages used. map from role to where to array of objects with keys:
+    // - name: "mypackage"
+    // - role: "use" or "test"
+    // - where: "client", "server", or "unspecified"
+    // - unordered: exclude from topological sort
+    var uses = {use: {client: [], server: [], unspecified: []},
+                test: {client: [], server: [], unspecified: []}};
+
+    // source files used. map from role to where to array of objects with keys:
+    // - path: path to file in project
+    // - where: "client" or "server" (not "unspecified")
+    var sources = {use: {client: [], server: [], unspecified: []},
+                   test: {client: [], server: [], unspecified: []}};
+
+    // exported symbols. map from role to where to array of objects with keys:
+    // - path: path to file in project
+    // - where: "client" or "server" (not "unspecified")
+    // Only includes explictly exported symbols for now, not @export comments.
+    var exports = {use: {client: [], server: [], unspecified: []},
+                   test: {client: [], server: [], unspecified: []}};
+
+    _.each(["use", "test"], function (role) {
+      if (self.roleHandlers[role]) {
+        _.each(["client", "server", "unspecified"], function (whereFromName) {
+          var whereFrom = whereFromName === "unspecified" ? undefined : whereFromName;
+
+          self.roleHandlers[role]({
+            use: function (names, whereToNames, options) {
+              options = options || {};
+
+              if (!(names instanceof Array))
+                names = names ? [names] : [];
+
+              if (!(whereToNames instanceof Array))
+                whereToNames = whereToNames ? [whereToNames] : ["unspecified"];
+
+              _.each(names, function (name) {
+                _.each(whereToNames, function (whereToName) {
+                  uses[role][whereFromName].push({name: name,
+                                                  role: options.role || "use",
+                                                  where: whereToName,
+                                                  unordered: options.unordered});
+                });
+              });
+            },
+            add_files: function (paths, whereToNames) {
+              if (!(paths instanceof Array))
+                paths = paths ? [paths] : [];
+
+              if (!(whereToNames instanceof Array))
+                whereToNames = whereToNames ? [whereToNames] : [];
+
+              _.each(paths, function (path) {
+                _.each(whereToNames, function (whereToName) {
+                  sources[role][whereFromName].push({path: path,
+                                                     where: whereToName});
+                });
+              });
+            },
+            exportSymbol: function (symbols, whereToNames) {
+              if (!(symbols instanceof Array))
+                symbols = symbols ? [symbols] : [];
+
+              if (!(whereToNames instanceof Array))
+                whereToNames = whereToNames ? [whereToNames] : [];
+
+              _.each(symbols, function (symbol) {
+                _.each(whereToNames, function (whereToName) {
+                  exports[role][whereFromName].push({symbol: symbol,
+                                                     where: whereToName});
+                });
+              });
+            },
+            error: function () {
+              throw new Error("api.error(), ironically, is no longer supported");
+            },
+            registered_extensions: function () {
+              throw new Error("api.registered_extensions() is no longer supported");
+            }
+          }, whereFrom);
+        });
+      }
+    });
+    console.log(self.name + " => " + JSON.stringify(uses));
   },
 
   // @returns {Boolean} was the package found in the app's packages/
