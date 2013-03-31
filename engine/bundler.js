@@ -293,6 +293,10 @@ var Bundle = function () {
   // to a package id to a PackageBundlingInfo.
   self.packageBundlingInfo = {use: {}, test: {}};
 
+  // All of the PackageBundlingInfos in self.packageBundlingInfo,
+  // sorted into the correct load order.
+  self.pbisByLoadOrder = [];
+
   // app dir. used to find packages in app
   self.appDir = null;
 
@@ -353,9 +357,9 @@ _.extend(Bundle.prototype, {
     return hash.digest('hex');
   },
 
-  // Return all PackageBundlingInfos in this bundle, sorted into load
-  // order.
-  _pbisByLoadOrder: function () {
+  // Set pbisByLoadOrder to all PackageBundlingInfos in this bundle,
+  // sorted into load order.
+  determineLoadOrder: function () {
     var self = this;
 
     // Taken an array of PackageBundlingInfo as input. Return an array
@@ -421,7 +425,8 @@ _.extend(Bundle.prototype, {
     _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
       pbis = pbis.concat(_.values(idToPbiMap));
     });
-    return loadOrderPbis(pbis);
+
+    self.pbisByLoadOrder = loadOrderPbis(pbis);
   },
 
   // Call to add a package to this bundle. The first argument may be
@@ -516,10 +521,9 @@ _.extend(Bundle.prototype, {
     // though a build step during which we compute their exports and
     // the export list becomes static package metadata so that we
     // don't have to do this.
-    var pbis = self._pbisByLoadOrder();
 
     // For each role, for each package, for each environment
-    _.each(pbis, function (pbi) {
+    _.each(self.pbisByLoadOrder, function (pbi) {
       _.each(_.keys(pbi.resources), function (where) {
         var isApp = ! pbi.pkg.name;
 
@@ -599,12 +603,8 @@ _.extend(Bundle.prototype, {
   addPackageResourcesToBundle: function () {
     var self = this;
 
-    // Compute dependency order across all PackageBundlingInfos (of
-    // all roles.)
-    var pbis = self._pbisByLoadOrder();
-
     // Copy their resources into the bundle in order
-    _.each(pbis, function (pbi) {
+    _.each(self.pbisByLoadOrder, function (pbi) {
       _.each(pbi.resources, function (resources, where) {
         _.each(resources, function (resource) {
 
@@ -1022,6 +1022,8 @@ exports.bundle = function (app_dir, output_path, options) {
         bundle.use(packageOrPackageName, null, {role: "test"});
       });
     }
+
+    bundle.determineLoadOrder();
 
     // Process JavaScript through the linker
     bundle.link();
