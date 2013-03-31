@@ -119,16 +119,6 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   // minification or linking purposes.)
   self.resources = {client: [], server: []};
 
-  // All symbols exported from the JavaScript code in this package
-  // instance. Map from where ("client", "server") to list of string
-  // (where string is "Foo", "Bar.baz", ...)
-  self.exports = {client: [], server: []};
-
-  // Symbols that the package author has specifically asked to export,
-  // even if they don't appear in export directives. Same format as
-  // self.exports.
-  self.forceExport = {client: [], server: []};
-
   // files we depend on -- map from rel_path to true
   self.dependencies = {};
   if (pkg.name)
@@ -545,7 +535,7 @@ _.extend(Bundle.prototype, {
         _.each(_.values(pbi.using), function (idToPbiMap) {
           _.each(_.values(idToPbiMap), function (otherPbi) {
             if (! pbi.unordered[otherPbi.pkg.id]) {
-              _.each(otherPbi.exports[where], function (symbol) {
+              _.each(otherPbi.pkg.exports[otherPbi.role][where], function (symbol) {
                 imports[symbol] = otherPbi.pkg.name;
               });
             }
@@ -586,7 +576,11 @@ _.extend(Bundle.prototype, {
         });
 
         // Save exports for use by future imports
-        pbi.exports[where] = results.exports;
+        // XXX saving on the Package object is a temporary hack ... In
+        // the future this export computation should be stored on the
+        // Package object to start with rather than be computed at
+        // link time.
+        pbi.pkg.exports[pbi.role][where] = results.exports;
 
         // Add each output as a resource
         _.each(results.files, function (outputFile) {

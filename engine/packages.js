@@ -57,8 +57,15 @@ var Package = function () {
   self.sources = {use: {client: [], server: []},
                   test: {client: [], server: []}};
 
-  // exported symbols. map from role to where to array of string symbol.
-  // Only includes explictly exported symbols for now, not @export comments.
+  // All symbols exported from the JavaScript code in this
+  // package. Map from role to where to array of string symbol (eg
+  // "Foo", "Bar.baz".)
+  //
+  // XXX for now, when the package is loaded, this is just the
+  // explicitly exported symbols from package.js, not @export
+  // comments. The bundler's link pass then rewrites this to the
+  // complete symbol list. This is a hack -- it should have the
+  // complete list to start with.
   self.exports = {use: {client: [], server: []},
                   test: {client: [], server: []}};
 
