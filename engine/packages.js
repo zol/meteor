@@ -506,12 +506,12 @@ _.extend(Package.prototype, {
   // this.uses, so should only be called once that has been set.
   //
   // 'role' should be 'use' or 'test'. 'where' should be 'client' or 'server'.
-  registeredExtensions: function (role, where) {
+  registeredExtensions: function (role, where, packageSearchOptions) {
     var self = this;
     var ret = _.keys(self.extensions);
 
     _.each(self.uses[role][where], function (pkgName) {
-      var pkg = packages.get(pkgName);
+      var pkg = packages.get(pkgName, packageSearchOptions);
       ret = _.union(ret, _.keys(pkg.extensions));
     });
 
@@ -522,7 +522,7 @@ _.extend(Package.prototype, {
   // found in this package. We'll use handlers that are defined in
   // this package and in its immediate dependencies. ('extension'
   // should be the extension of the file without a leading dot.)
-  getSourceHandler: function (role, where, extension) {
+  getSourceHandler: function (role, where, extension, packageSearchOptions) {
     var self = this;
     var candidates = [];
 
@@ -531,7 +531,7 @@ _.extend(Package.prototype, {
 
     var seen = {};
     _.each(self.uses[role][where], function (pkgName) {
-      var otherPkg = packages.get(pkgName);
+      var otherPkg = packages.get(pkgName, packageSearchOptions);
       if (extension in otherPkg.extensions)
         candidates.push(otherPkg.extensions[extension]);
     });

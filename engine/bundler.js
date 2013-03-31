@@ -98,19 +98,28 @@ var Slice = function (pkg, role, where) {
 // Bundle
 ///////////////////////////////////////////////////////////////////////////////
 
-var Bundle = function () {
+// options to include:
+//
+// - release: the Meteor release name to write into the bundle metadata
+// - appDir: null, or a path to the root of an app tree that is to be
+//   searched for package overrides
+// - releaseManifest: null, or a manifest that is to be used when
+//   searching for packages
+var Bundle = function (options) {
   var self = this;
 
   // All of the Slices that are to go into this bundle, in the order
   // that they are to be loaded.
   self.slices = [];
 
-  // app dir. used to find packages in app
-  self.appDir = null;
-
-  // meteor release manifest
-  self.releaseManifest = null;
+  // meteor release version
   self.release = null;
+
+  // search configuration for package.get()
+  self.packageSearchOptions = {
+    releaseManifest: options.releaseManifest,
+    appDir: options.appDir
+  };
 
   // map from environment, to list of filenames
   self.js = {client: [], server: []};
@@ -154,7 +163,75 @@ _.extend(Bundle.prototype, {
   },
 
   _prepSlice: function (pkg, role, where) {
-    return new Slice(pkg, role, where);
+    var self = this;
+    var slice = new Slice(pkg, role, where);
+
+    /**
+     * This is the ultimate low-level API to add data to the bundle.
+     *
+     * type: "js", "css", "head", "body", "static"
+     *
+     * path: the (absolute) path at which the file will be
+     * served. ignored in the case of "head" and "body".
+     *
+     * source_file: the absolute path to read the data from. if path
+     * is set, will default based on that. overridden by data.
+     *
+     * data: the data to send. overrides source_file if present. you
+     * must still set path (except for "head" and "body".)
+     */
+    var add_resource = function (options) {
+      var source_file = options.source_file || options.path;
+
+      var data;
+      if (options.data) {
+        data = options.data;
+        if (!(data instanceof Buffer)) {
+          if (!(typeof data === "string"))
+            throw new Error("Bad type for data");
+          data = new Buffer(data, 'utf8');
+        }
+      } else {
+        if (!source_file)
+          throw new Error("Need either source_file or data");
+        data = fs.readFileSync(source_file);
+      }
+
+      if (options.where && options.where !== slice.where)
+        throw new Error("'where' is deprecated here and if provided " +
+                        "must be '" + slice.where + "'");
+
+      slice.resources.push({
+        type: options.type,
+        data: data,
+        servePath: options.path
+      });
+    };
+
+    var sources = slice.pkg.sources[slice.role][slice.where];
+    _.each(sources, function (relPath) {
+
+      var ext = path.extname(relPath).substr(1);
+      var handler = slice.pkg.getSourceHandler(slice.role, slice.where, ext,
+                                               self.packageSearchOptions);
+      if (! handler) {
+        // If we don't have an extension handler, serve this file
+        // as a static resource.
+        slice.resources.push({
+          type: "static",
+          data: fs.readFileSync(path.join(slice.pkg.source_root, relPath)),
+          servePath: path.join(slice.pkg.serve_root, relPath)
+        });
+        return;
+      }
+
+      handler({add_resource: add_resource},
+              path.join(slice.pkg.source_root, relPath),
+              path.join(slice.pkg.serve_root, relPath),
+              slice.where);
+    });
+
+    return slice;
   },
 
   // Determine the packages to load, create Slices for
@@ -266,10 +343,7 @@ _.extend(Bundle.prototype, {
 
   getPackage: function (packageOrPackageName) {
     var self = this;
-    var pkg = packages.get(packageOrPackageName, {
-      releaseManifest: self.releaseManifest,
-      appDir: self.appDir
-    });
+    var pkg = packages.get(packageOrPackageName, self.packageSearchOptions);
     if (! pkg) {
       console.error("Package not found: " + packageOrPackageName);
       process.exit(1);
@@ -284,75 +358,6 @@ _.extend(Bundle.prototype, {
     // use '/' rather than path.join since this is part of a url
     var relNodeModulesPath = ['packages', pkg.name, 'node_modules'].join('/');
     this.nodeModulesDirs[relNodeModulesPath] = nodeModulesPath;
-  },
-
-  compileSources: function () {
-    var self = this;
-    _.each(self.slices, function (slice) {
-      /**
-       * This is the ultimate low-level API to add data to the bundle.
-       *
-       * type: "js", "css", "head", "body", "static"
-       *
-       * path: the (absolute) path at which the file will be
-       * served. ignored in the case of "head" and "body".
-       *
-       * source_file: the absolute path to read the data from. if path
-       * is set, will default based on that. overridden by data.
-       *
-       * data: the data to send. overrides source_file if present. you
-       * must still set path (except for "head" and "body".)
-       */
-      var add_resource = function (options) {
-        var source_file = options.source_file || options.path;
-
-        var data;
-        if (options.data) {
-          data = options.data;
-          if (!(data instanceof Buffer)) {
-            if (!(typeof data === "string"))
-              throw new Error("Bad type for data");
-            data = new Buffer(data, 'utf8');
-          }
-        } else {
-          if (!source_file)
-            throw new Error("Need either source_file or data");
-          data = fs.readFileSync(source_file);
-        }
-
-        if (options.where && options.where !== slice.where)
-          throw new Error("'where' is deprecated here and if provided " +
-                          "must be '" + slice.where + "'");
-
-        slice.resources.push({
-          type: options.type,
-          data: data,
-          servePath: options.path
-        });
-      };
-
-      var sources = slice.pkg.sources[slice.role][slice.where];
-      _.each(sources, function (relPath) {
-
-        var ext = path.extname(relPath).substr(1);
-        var handler = slice.pkg.getSourceHandler(slice.role, slice.where, ext);
-        if (! handler) {
-          // If we don't have an extension handler, serve this file
-          // as a static resource.
-          slice.resources.push({
-            type: "static",
-            data: fs.readFileSync(path.join(slice.pkg.source_root, relPath)),
-            servePath: path.join(slice.pkg.serve_root, relPath)
-          });
-          return;
-        }
-
-        handler({add_resource: add_resource},
-                path.join(slice.pkg.source_root, relPath),
-                path.join(slice.pkg.serve_root, relPath),
-                slice.where);
-      });
-    });
   },
 
   // Run the linker over the JavaScript assets that have accumulated
@@ -556,8 +561,12 @@ _.extend(Bundle.prototype, {
     var ret = [];
 
     _.each(self.slices, function (slice) {
-      if (! slice.pkg.name)
-        ret = _.union(ret, slice.pkg.registeredExtensions(slice.role, slice.where));
+      if (! slice.pkg.name) {
+        var exts =
+          slice.pkg.registeredExtensions(slice.role, slice.where,
+                                         self.packageSearchOptions);
+        ret = _.union(ret, exts);
+      }
     });
 
     return ret;
@@ -827,18 +836,18 @@ exports.bundle = function (app_dir, output_path, options) {
     throw new Error("Must pass options.release. Pass 'none' for local packages only");
 
   try {
-    // Create a bundle and set up release manifest
+    // Create a bundle and set up package search path
     packages.flush();
-
-    var bundle = new Bundle;
-    bundle.releaseManifest = warehouse.releaseManifestByVersion(options.release);
-    bundle.release = options.release;
-    bundle.appDir = app_dir;
+    var bundle = new Bundle({
+      release: options.release,
+      releaseManifest: warehouse.releaseManifestByVersion(options.release),
+      appDir: app_dir
+    });
 
     // Create a Package object that represents the app
     var app = packages.get_for_app(app_dir, ignore_files);
 
-    // Populate the list of packages to load
+    // Populate the list of slices to load
     bundle.determineLoadOrder({
       use: {client: [app], server: [app]},
       test: {client: options.testPackages || [],
@@ -847,9 +856,6 @@ exports.bundle = function (app_dir, output_path, options) {
 
     // Process npm modules
     bundle.prepNodeModules();
-
-    // Run each source file through its extension handler
-    bundle.compileSources();
 
     // Process JavaScript through the linker
     bundle.link();
