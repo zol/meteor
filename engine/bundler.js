@@ -405,6 +405,20 @@ _.extend(Bundle.prototype, {
     self.pbisByLoadOrder = loadOrderPbis(pbis);
   },
 
+  prepNodeModules: function () {
+    var self = this;
+    var seen = {};
+    _.each(self.pbisByLoadOrder, function (pbi) {
+      // Bring npm dependencies up to date. One day this will probably
+      // grow into a full-fledged package build step.
+      if (pbi.pkg.npmDependencies && ! seen[pbi.pkg.id]) {
+        seen[pbi.pkg.id] = true;
+        pbi.pkg.installNpmDependencies();
+        self.bundleNodeModules(pbi.pkg);
+      }
+    });
+  },
+
   getPackage: function (packageOrPackageName) {
     var self = this;
     var pkg = packages.get(packageOrPackageName, {
@@ -455,13 +469,6 @@ _.extend(Bundle.prototype, {
     if (inst.where[canon_where])
       return; // already used in this environment
     inst.where[canon_where] = true;
-
-    // Bring npm dependencies up to date. One day this will probably
-    // grow into a full-fledged package build step.
-    if (pkg.npmDependencies) {
-      pkg.installNpmDependencies();
-      self.bundleNodeModules(pkg);
-    }
 
     // Find and call the package's on_xxx handler (eg, on_use, on_test)
     var handler = pkg.roleHandlers[role];
@@ -988,6 +995,9 @@ exports.bundle = function (app_dir, output_path, options) {
       test: {client: options.testPackages || [],
              server: options.testPackages || []}
     });
+
+    // Process npm modules
+    bundle.prepNodeModules();
 
     // Process JavaScript through the linker
     bundle.link();
