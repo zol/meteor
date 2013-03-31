@@ -81,13 +81,6 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   // instance of the package's tests.
   self.role = role || "use";
 
-  // list of places we've already been used. map from a 'canonicalized
-  // where' to true. 'canonicalized where' is the JSONification of a
-  // sorted array with zero or more elements drawn from the set
-  // 'client', 'server', with each element unique
-  // XXX this is a mess, refactor
-  self.where = {};
-
   // True for each possible 'where' if in fact we are being asked to
   // load there.
   self.presentInEnvironment = {client: false, server: false};
@@ -307,12 +300,8 @@ _.extend(Bundle.prototype, {
   },
 
   // Call to add a package to this bundle. The first argument may be
-  // either a package or a package name. If 'where' is given, it's an
-  // array of "client" and/or "server".
-  //
-  // options can include:
-  // - role: "use", the default, to use the package normally; or
-  //   another role, eg "test", to use a different slice of a package
+  // either a package or a package name. where is exactly one of
+  // 'client' or 'server'. role is exactly one of 'use' or 'test'.
   use: function (packageOrPackageName, where, role) {
     var self = this;
 
@@ -324,40 +313,14 @@ _.extend(Bundle.prototype, {
     // necessary
     var pbi = self._get_bundling_info_for_package(pkg, role);
 
-    // If this package has been used before anywhere else in this
-    // bundle, with the exact same environment, then we can stop -- we
-    // know we've already done all of the necessary setup work at
-    // least once.
-    var canon_where = where;
-    if (!canon_where)
-      canon_where = [];
-    if (!(canon_where instanceof Array))
-      canon_where = [canon_where];
-    else
-      canon_where = _.clone(canon_where);
-    canon_where.sort();
-    canon_where = JSON.stringify(canon_where); // 'canonicalized where'
-
-    if (pbi.where[canon_where])
-      return; // already used in this environment
-    pbi.where[canon_where] = true;
-
-    // Heuristically interpret 'where' to figure out which parts of a
-    // package we are to load, per strategy in #OldStylePackageSupport
-    var presentWhere = where;
-    if (!presentWhere)
-      presentWhere = ["client", "server"];
-    if (!(presentWhere instanceof Array))
-      presentWhere = [presentWhere];
-    _.each(presentWhere, function (w) {
-      pbi.presentInEnvironment[w] = true;
-    });
+    // Mark this slice as used
+    if (pbi.presentInEnvironment[where])
+      return; // already did this one -- avoid recursing forever (below)
+    pbi.presentInEnvironment[where] = true;
 
     // Bring in other required packages
-    _.each(presentWhere, function (w) {
-      _.each(pkg.uses[role][w], function (usedPkgName) {
-        self.use(usedPkgName, w, "use");
-      });
+    _.each(pkg.uses[role][where], function (usedPkgName) {
+      self.use(usedPkgName, where, "use");
     });
   },
 
