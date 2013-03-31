@@ -3,11 +3,11 @@ Package.describe({
 });
 
 Package.on_use(function (api) {
-  api.use('underscore', 'server');
+  api.use('underscore', ['client', 'server']);
   api.use('localstorage-polyfill', 'client');
-  api.use('accounts-urls', 'client');
+  api.use('accounts-urls', ['client', 'server']);
   api.use('deps', 'client');
-  api.use('random', 'client');
+  api.use('random', ['client', 'server']);
 
   // need this because of the Meteor.users collection but in the future
   // we'd probably want to abstract this away

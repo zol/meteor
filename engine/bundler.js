@@ -548,14 +548,13 @@ _.extend(Bundle.prototype, {
         // in JavaScript.) Note that in the case of conflicting
         // symbols, later packages get precedence.
         var imports = {}; // map from symbol to supplying package name
-        _.each(_.values(pbi.using), function (idToPbiMap) {
-          _.each(_.values(idToPbiMap), function (otherPbi) {
-            if (! pbi.unordered[otherPbi.pkg.id]) {
-              _.each(otherPbi.pkg.exports[otherPbi.role][where], function (symbol) {
-                imports[symbol] = otherPbi.pkg.name;
-              });
-            }
-          });
+        _.each(_.values(pbi.pkg.uses[pbi.role][where]), function (otherPkgName){
+          var otherPkg = packages.get(otherPkgName);
+          if (otherPkg.name && ! pbi.pkg.unordered[otherPkg.name]) {
+            _.each(otherPkg.exports.use[where], function (symbol) {
+              imports[symbol] = otherPkg.name;
+            });
+          }
         });
 
         // Pull out the JavaScript files
