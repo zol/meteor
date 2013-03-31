@@ -242,6 +242,16 @@ _.extend(Package.prototype, {
         });
       }
     });
+
+    // Also, everything depends on the package 'meteor', which sets up
+    // the basic environment) (except 'meteor' itself)
+    _.each(["use", "test"], function (role) {
+      _.each(["client", "server"], function (where) {
+        if (name !== "meteor" && role !== "use")
+          self.uses[role][where].unshift("meteor");
+      });
+    });
+
   },
 
   // @returns {Boolean} was the package found in the app's packages/
@@ -301,7 +311,7 @@ _.extend(Package.prototype, {
     // standard client packages (for now), for the classic meteor
     // stack.
     // XXX remove and make everyone explicitly declare all dependencies
-    var packages = ['deps', 'session', 'livedata', 'mongo-livedata',
+    var packages = ['meteor', 'deps', 'session', 'livedata', 'mongo-livedata',
                     'spark', 'templating', 'startup', 'past'];
     packages =
       _.union(packages,
