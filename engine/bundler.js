@@ -88,6 +88,10 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   // XXX this is a mess, refactor
   self.where = {};
 
+  // True for each possible 'where' if in fact we are being asked to
+  // load there.
+  self.presentInEnvironment = {client: false, server: false};
+
   // Tracks which source files have already been added, so we don't
   // add them again. Map from where ("client", "server") to a source
   // file name (relative to the package) to true
@@ -450,7 +454,7 @@ _.extend(Bundle.prototype, {
 
     // Find the bundling state for this package and role, creating if
     // necessary
-    var inst = self._get_bundling_info_for_package(pkg, role);
+    var pbi = self._get_bundling_info_for_package(pkg, role);
 
     // If this package has been used before anywhere else in this
     // bundle, with the exact same environment, then we can stop -- we
@@ -466,14 +470,27 @@ _.extend(Bundle.prototype, {
     canon_where.sort();
     canon_where = JSON.stringify(canon_where); // 'canonicalized where'
 
-    if (inst.where[canon_where])
+    if (pbi.where[canon_where])
       return; // already used in this environment
-    inst.where[canon_where] = true;
+    pbi.where[canon_where] = true;
 
-    // Find and call the package's on_xxx handler (eg, on_use, on_test)
-    var handler = pkg.roleHandlers[role];
-    if (handler)
-      handler(inst.api, where);
+    // Heuristically interpret 'where' to figure out which parts of a
+    // package we are to load, per strategy in #OldStylePackageSupport
+    var presentWhere = where;
+    if (!presentWhere)
+      presentWhere = ["client", "server"];
+    if (!(presentWhere instanceof Array))
+      presentWhere = [presentWhere];
+    _.each(presentWhere, function (w) {
+      pbi.presentInEnvironment[w] = true;
+    });
+
+    // Bring in other required packages
+    _.each(presentWhere, function (w) {
+      _.each(pkg.uses[role][w], function (usedPkgName) {
+        self.use(usedPkgName, w);
+      });
+    });
   },
 
   // map a package's generated node_modules directory to the package
@@ -483,6 +500,21 @@ _.extend(Bundle.prototype, {
     // use '/' rather than path.join since this is part of a url
     var relNodeModulesPath = ['packages', pkg.name, 'node_modules'].join('/');
     this.nodeModulesDirs[relNodeModulesPath] = nodeModulesPath;
+  },
+
+  compileSources: function () {
+    var self = this;
+    _.each(self.pbisByLoadOrder, function (pbi) {
+      _.each(pbi.presentInEnvironment, function (isPresent, where) {
+        if (! isPresent)
+          return;
+
+        var sources = pbi.pkg.sources[pbi.role][where];
+        _.each(sources, function (relPath) {
+          pbi.add_file(relPath, where);
+        });
+      });
+    });
   },
 
   // Run the linker over the JavaScript assets that have accumulated
@@ -998,6 +1030,9 @@ exports.bundle = function (app_dir, output_path, options) {
 
     // Process npm modules
     bundle.prepNodeModules();
+
+    // Run each source file through its extension handler
+    bundle.compileSources();
 
     // Process JavaScript through the linker
     bundle.link();

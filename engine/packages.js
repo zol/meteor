@@ -195,7 +195,8 @@ _.extend(Package.prototype, {
     // by default. This simple strategy doesn't capture even 10% of
     // the complexity possible with on_use, on_test, and where, but
     // probably is sufficient for virtually all packages that actually
-    // exist in the field, if not every single one.
+    // exist in the field, if not every single
+    // one. #OldStylePackageSupport
     _.each(["use", "test"], function (role) {
       if (self.roleHandlers[role]) {
         self.roleHandlers[role]({
