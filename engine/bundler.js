@@ -112,10 +112,6 @@ var PackageBundlingInfo = function (pkg, role) {
 var Bundle = function () {
   var self = this;
 
-  // Packages being used. Map from a role string (eg, "use" or "test")
-  // to a package id to a PackageBundlingInfo.
-  self.packageBundlingInfo = {use: {}, test: {}};
-
   // All of the PackageBundlingInfos in self.packageBundlingInfo,
   // sorted into the correct load order.
   self.pbisByLoadOrder = [];
@@ -162,18 +158,6 @@ var Bundle = function () {
 };
 
 _.extend(Bundle.prototype, {
-  _get_bundling_info_for_package: function (pkg, role) {
-    var self = this;
-
-    var bundlingInfo = self.packageBundlingInfo[role][pkg.id];
-    if (!bundlingInfo) {
-      bundlingInfo = new PackageBundlingInfo(pkg, role);
-      self.packageBundlingInfo[role][pkg.id] = bundlingInfo;
-    }
-
-    return bundlingInfo;
-  },
-
   _hash: function (contents) {
     var hash = crypto.createHash('sha1');
     hash.update(contents);
@@ -189,11 +173,21 @@ _.extend(Bundle.prototype, {
   determineLoadOrder: function (contents) {
     var self = this;
 
+    // Packages being used. Map from a role string (eg, "use" or "test")
+    // to a package id to a PackageBundlingInfo.
+    var pbiIndex = {use: {}, test: {}};
+    var ensurePbi = function (pkg, role) {
+      var self = this;
+      var pbi = pbiIndex[role][pkg.id];
+      return pbi ? pbi :
+        (pbiIndex[role][pkg.id] = new PackageBundlingInfo(pkg, role));
+    };
+
     // Ensure that pbis exist for a package and its dependencies. Set
     // 'presentInEnvironment' flags to determine which parts of the
     // package we'll load.
     var add = function (pkg, role, where) {
-      var pbi = self._get_bundling_info_for_package(pkg, role);
+      var pbi = ensurePbi(pkg, role);
       if (! pbi.presentInEnvironment[where]) {
         pbi.presentInEnvironment[where] = true;
         _.each(pkg.uses[role][where], function (usedPkgName) {
@@ -252,8 +246,7 @@ _.extend(Bundle.prototype, {
               if (pbi.pkg.name && pbi.pkg.unordered[usedPkgName])
                 return;
               var usedPkg = self.getPackage(usedPkgName);
-              var usedPbi = self._get_bundling_info_for_package(usedPkg,
-                                                                "use");
+              var usedPbi = ensurePbi(usedPkg, "use");
               if (onStack[id(usedPbi)]) {
                 console.error("fatal: circular dependency between packages " +
                               pbi.pkg.name + " and " + usedPbi.pkg.name);
@@ -275,7 +268,7 @@ _.extend(Bundle.prototype, {
     };
 
     var pbis = [];
-    _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
+    _.each(_.values(pbiIndex), function (idToPbiMap) {
       pbis = pbis.concat(_.values(idToPbiMap));
     });
 
@@ -607,16 +600,14 @@ _.extend(Bundle.prototype, {
     var self = this;
     var ret = [];
 
-    _.each(self.packageBundlingInfo, function (idToPbiMap) {
-      _.each(idToPbiMap, function (pbi) {
-        if (! pbi.pkg.name) {
-          _.each(["use", "test"], function (role) {
-            _.each(["client", "server"], function (where) {
-              ret = _.union(ret, pbi.pkg.registeredExtensions(role, where));
-            });
+    _.each(self.pbisByLoadOrder, function (pbi) {
+      if (! pbi.pkg.name) {
+        _.each(["use", "test"], function (role) {
+          _.each(["client", "server"], function (where) {
+            ret = _.union(ret, pbi.pkg.registeredExtensions(role, where));
           });
-        }
-      });
+        });
+      }
     });
 
     return ret;
@@ -815,19 +806,17 @@ _.extend(Bundle.prototype, {
     dependencies_json.extensions = self._app_extensions();
     dependencies_json.exclude = _.pluck(ignore_files, 'source');
     dependencies_json.packages = {};
-    _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
-      _.each(_.values(idToPbiMap), function (pbi) {
-        if (pbi.pkg.name) {
-          dependencies_json.packages[pbi.pkg.name] = _.union(
-            dependencies_json.packages[pbi.pkg.name] || [],
-            pbi.pkg.extraDependencies,
-            pbi.presentInEnvironment.server ?
-              pbi.pkg.sources[pbi.role].server : [],
-            pbi.presentInEnvironment.client ?
-              pbi.pkg.sources[pbi.role].client : []
-          );
-        }
-      });
+    _.each(_.values(self.pbisByLoadOrder), function (pbi) {
+      if (pbi.pkg.name) {
+        dependencies_json.packages[pbi.pkg.name] = _.union(
+          dependencies_json.packages[pbi.pkg.name] || [],
+          pbi.pkg.extraDependencies,
+          pbi.presentInEnvironment.server ?
+            pbi.pkg.sources[pbi.role].server : [],
+          pbi.presentInEnvironment.client ?
+            pbi.pkg.sources[pbi.role].client : []
+        );
+      }
     });
 
     if (self.release && self.release !== 'none')
