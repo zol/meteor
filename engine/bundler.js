@@ -71,10 +71,9 @@ var ignore_files = [
 // depends on P. This would otherwise be a circular dependency.) In
 // the future, we should probably just model tests as totally separate
 // packages.
-var PackageBundlingInfo = function (pkg, bundle, role) {
+var PackageBundlingInfo = function (pkg, role) {
   var self = this;
   self.pkg = pkg;
-  self.bundle = bundle;
 
   // "use" in the normal case (this object represents the instance of
   // a package in a bundle), or "test" if this instead represents an
@@ -104,11 +103,6 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   // honored for JavaScript but ignored if we are concatenating (for
   // minification or linking purposes.)
   self.resources = {client: [], server: []};
-
-  // files we depend on -- map from rel_path to true
-  self.dependencies = {};
-  if (pkg.name)
-    self.dependencies['package.js'] = true;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -173,7 +167,7 @@ _.extend(Bundle.prototype, {
 
     var bundlingInfo = self.packageBundlingInfo[role][pkg.id];
     if (!bundlingInfo) {
-      bundlingInfo = new PackageBundlingInfo(pkg, self, role);
+      bundlingInfo = new PackageBundlingInfo(pkg, role);
       self.packageBundlingInfo[role][pkg.id] = bundlingInfo;
     }
 
@@ -400,8 +394,6 @@ _.extend(Bundle.prototype, {
                   path.join(pbi.pkg.source_root, relPath),
                   path.join(pbi.pkg.serve_root, relPath),
                   where);
-
-          pbi.dependencies[relPath] = true;
         });
       });
     });
@@ -826,15 +818,14 @@ _.extend(Bundle.prototype, {
     _.each(_.values(self.packageBundlingInfo), function (idToPbiMap) {
       _.each(_.values(idToPbiMap), function (pbi) {
         if (pbi.pkg.name) {
-          // merge the dependencies in _.keys(pbi.dependencies) with
-          // anything that might already be in
-          // dependencies_json.packages[pbi.pkg.name] from other roles
-          var relpaths = {};
-          _.each(dependencies_json.packages[pbi.pkg.name] || [], function (p) {
-            relpaths[p] = true;
-          });
-          _.extend(relpaths, pbi.dependencies);
-          dependencies_json.packages[pbi.pkg.name] = _.keys(relpaths);
+          dependencies_json.packages[pbi.pkg.name] = _.union(
+            dependencies_json.packages[pbi.pkg.name] || [],
+            pbi.pkg.extraDependencies,
+            pbi.presentInEnvironment.server ?
+              pbi.pkg.sources[pbi.role].server : [],
+            pbi.presentInEnvironment.client ?
+              pbi.pkg.sources[pbi.role].client : []
+          );
         }
       });
     });

@@ -57,6 +57,10 @@ var Package = function () {
   self.sources = {use: {client: [], server: []},
                   test: {client: [], server: []}};
 
+  // Other files that we want to monitor for changes in development
+  // mode, such as package.js. Array of relative paths.
+  self.extraDependencies = [];
+
   // All symbols exported from the JavaScript code in this
   // package. Map from role to where to array of string symbol (eg
   // "Foo", "Bar.baz".)
@@ -181,6 +185,8 @@ _.extend(Package.prototype, {
     // steer clear
     var func = require('vm').runInThisContext(wrapped, fullpath, true);
     func(self.packageFacade, self.npmFacade);
+
+    self.extraDependencies.push('package.js');
 
     // For this old-style, on_use/on_test/where-based package, figure
     // out its dependencies by calling its on_xxx functions and seeing
