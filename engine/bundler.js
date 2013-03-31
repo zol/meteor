@@ -262,35 +262,6 @@ _.extend(PackageBundlingInfo.prototype, {
   // found in this package. We'll use handlers that are defined in
   // this package and in its immediate dependencies. ('extension'
   // should be the extension of the file without a leading dot.)
-  get_source_handler: function (extension) {
-    var self = this;
-    var candidates = [];
-
-    if (self.role === "use" && extension in self.pkg.extensions)
-      candidates.push(self.pkg.extensions[extension]);
-
-    _.each(self.using.use, function (otherPbi) {
-      var otherPkg = otherPbi.pkg;
-      if (extension in otherPkg.extensions)
-        candidates.push(otherPkg.extensions[extension]);
-    });
-
-    // XXX do something more graceful than printing a stack trace and
-    // exiting!! we have higher standards than that!
-
-    if (!candidates.length)
-      return null;
-
-    if (candidates.length > 1)
-      // XXX improve error message (eg, name the packages involved)
-      // and make it clear that it's not a global conflict, but just
-      // among this package's dependencies
-      throw new Error("Conflict: two packages are both trying " +
-                      "to handle ." + extension);
-
-    return candidates[0];
-  },
-
   add_file: function (rel_path, where) {
     var self = this;
 
@@ -299,7 +270,7 @@ _.extend(PackageBundlingInfo.prototype, {
     self.sourceFileAdded[where][rel_path] = true;
 
     var ext = path.extname(rel_path).substr(1);
-    var handler = self.get_source_handler(ext);
+    var handler = self.pkg.getSourceHandler(self.role, where, ext);
     if (! handler) {
       // If we don't have an extension handler, serve this file
       // as a static resource.

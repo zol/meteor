@@ -40,7 +40,11 @@ var Package = function () {
   // registered source file handlers
   self.extensions = {};
 
-  // packages used. map from role to where to array of package name (string.)
+  // Packages used. Map from role to where to array of package name
+  // (string.) The ordering in the array is significant only for
+  // determining import symbol priority (it doesn't affect load
+  // order.) A given package name should occur only once in a given
+  // array.
   self.uses = {use: {client: [], server: []},
                test: {client: [], server: []}};
 
@@ -247,11 +251,34 @@ _.extend(Package.prototype, {
     // the basic environment) (except 'meteor' itself)
     _.each(["use", "test"], function (role) {
       _.each(["client", "server"], function (where) {
-        if (name !== "meteor" && role !== "use")
+        if (! (name === "meteor" && role === "use"))
           self.uses[role][where].unshift("meteor");
       });
     });
 
+    self._uniquifyPackages();
+  },
+
+  // If a package appears twice in a 'self.uses' list, keep only the
+  // rightmost instance.
+  _uniquifyPackages: function () {
+    var self = this;
+
+    _.each(["use", "test"], function (role) {
+      _.each(["client", "server"], function (where) {
+        var input = self.uses[role][where];
+        var output = [];
+
+        var seen = {};
+        for (var i = input.length - 1; i >= 0; i--) {
+          if (! seen[input[i]])
+            output.unshift(input[i]);
+          seen[input[i]] = true;
+        }
+
+        self.uses[role][where] = output;
+      });
+    });
   },
 
   // @returns {Boolean} was the package found in the app's packages/
@@ -329,6 +356,7 @@ _.extend(Package.prototype, {
         self.uses[role][where] = packages;
       });
     });
+    self._uniquifyPackages();
 
     self.sources.use.client = sources_except("use", "client", "server");
     self.sources.use.server = sources_except("use", "server", "client");
@@ -439,6 +467,40 @@ _.extend(Package.prototype, {
     });
 
     return _.map(ret, function (x) {return "." + x;});
+  },
+
+  // Find the function that should be used to handle a source file
+  // found in this package. We'll use handlers that are defined in
+  // this package and in its immediate dependencies. ('extension'
+  // should be the extension of the file without a leading dot.)
+  getSourceHandler: function (role, where, extension) {
+    var self = this;
+    var candidates = [];
+
+    if (role === "use" && extension in self.extensions)
+      candidates.push(self.extensions[extension]);
+
+    var seen = {};
+    _.each(self.uses[role][where], function (pkgName) {
+      var otherPkg = packages.get(pkgName);
+      if (extension in otherPkg.extensions)
+        candidates.push(otherPkg.extensions[extension]);
+    });
+
+    // XXX do something more graceful than printing a stack trace and
+    // exiting!! we have higher standards than that!
+
+    if (!candidates.length)
+      return null;
+
+    if (candidates.length > 1)
+      // XXX improve error message (eg, name the packages involved)
+      // and make it clear that it's not a global conflict, but just
+      // among this package's dependencies
+      throw new Error("Conflict: two packages are both trying " +
+                      "to handle ." + extension);
+
+    return candidates[0];
   }
 });
 
