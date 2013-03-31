@@ -205,7 +205,7 @@ _.extend(Bundle.prototype, {
     _.each(contents, function (wToArray, role) {
       _.each(wToArray, function (ps, where) {
         _.each(ps, function (packageOrPackageName) {
-          self.use(packageOrPackageName, where, {role: role});
+          self.use(packageOrPackageName, where, role);
         });
       });
     });
@@ -313,10 +313,8 @@ _.extend(Bundle.prototype, {
   // options can include:
   // - role: "use", the default, to use the package normally; or
   //   another role, eg "test", to use a different slice of a package
-  use: function (packageOrPackageName, where, options) {
+  use: function (packageOrPackageName, where, role) {
     var self = this;
-    options = options || {};
-    var role = options.role || "use";
 
     // Find the package, or exit
     // Is identify if 'packageOrPackageName
@@ -358,7 +356,7 @@ _.extend(Bundle.prototype, {
     // Bring in other required packages
     _.each(presentWhere, function (w) {
       _.each(pkg.uses[role][w], function (usedPkgName) {
-        self.use(usedPkgName, w);
+        self.use(usedPkgName, w, "use");
       });
     });
   },
