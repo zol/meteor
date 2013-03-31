@@ -357,10 +357,22 @@ _.extend(Bundle.prototype, {
     return hash.digest('hex');
   },
 
-  // Set pbisByLoadOrder to all PackageBundlingInfos in this bundle,
-  // sorted into load order.
-  determineLoadOrder: function () {
+  // Determine the packages to load, create PackageBundlingInfos for
+  // them, put them in load order, save in pbisByLoadOrder.
+  //
+  // contents is a map from role ('use' or 'test') to environment
+  // ('client' or 'server') to an array of either package names or
+  // actual Package objects.
+  determineLoadOrder: function (contents) {
     var self = this;
+
+    _.each(contents, function (wToArray, role) {
+      _.each(wToArray, function (ps, where) {
+        _.each(ps, function (packageOrPackageName) {
+          self.use(packageOrPackageName, where, {role: role});
+        });
+      });
+    });
 
     // Taken an array of PackageBundlingInfo as input. Return an array
     // with the same PackageBundlingInfo, but sorted such that if X
@@ -1004,7 +1016,7 @@ exports.bundle = function (app_dir, output_path, options) {
     throw new Error("Must pass options.release. Pass 'none' for local packages only");
 
   try {
-    // Create a bundle, add the project
+    // Create a bundle and set up release manifest
     packages.flush();
 
     var bundle = new Bundle;
@@ -1012,18 +1024,15 @@ exports.bundle = function (app_dir, output_path, options) {
     bundle.release = options.release;
     bundle.appDir = app_dir;
 
-    // our release manifest is set, let's now load the app
+    // Create a Package object that represents the app
     var app = packages.get_for_app(app_dir, ignore_files);
-    bundle.use(app);
 
-    // Include tests if requested
-    if (options.testPackages) {
-      _.each(options.testPackages, function (packageOrPackageName) {
-        bundle.use(packageOrPackageName, null, {role: "test"});
-      });
-    }
-
-    bundle.determineLoadOrder();
+    // Populate the list of packages to load
+    bundle.determineLoadOrder({
+      use: {client: [app], server: [app]},
+      test: {client: options.testPackages || [],
+             server: options.testPackages || []}
+    });
 
     // Process JavaScript through the linker
     bundle.link();
