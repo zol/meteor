@@ -56,22 +56,13 @@ var ignore_files = [
 ];
 
 ///////////////////////////////////////////////////////////////////////////////
-// PackageBundlingInfo
+// Slice
 ///////////////////////////////////////////////////////////////////////////////
 
-// Represents the occurrence of a package in a bundle. Includes data
-// relevant to the process of bundling this package, distinct from the
-// package data itself.
-//
-// If a package is having its tests run, it will have two distinct
-// PackageBundlingInfo instances, one for the package itself, and one
-// for the tests. These are distinguished by the the "role" attribute.
-// This lets us get dependency load order correct. (It lets the tests
-// for package P depend on a package D, such as the test system, that
-// depends on P. This would otherwise be a circular dependency.) In
-// the future, we should probably just model tests as totally separate
-// packages.
-var PackageBundlingInfo = function (pkg, role, where) {
+// Holds the resources that a package is contributing to a bundle, for
+// a particular role ('use' or 'test') and a particular where
+// ('client' or 'server').
+var Slice = function (pkg, role, where) {
   var self = this;
   self.pkg = pkg;
 
@@ -110,9 +101,9 @@ var PackageBundlingInfo = function (pkg, role, where) {
 var Bundle = function () {
   var self = this;
 
-  // All of the PackageBundlingInfos in self.packageBundlingInfo,
-  // sorted into the correct load order.
-  self.pbisByLoadOrder = [];
+  // All of the Slices that are to go into this bundle, in the order
+  // that they are to be loaded.
+  self.slices = [];
 
   // app dir. used to find packages in app
   self.appDir = null;
@@ -162,8 +153,12 @@ _.extend(Bundle.prototype, {
     return hash.digest('hex');
   },
 
-  // Determine the packages to load, create PackageBundlingInfos for
-  // them, put them in load order, save in pbisByLoadOrder.
+  _prepSlice: function (pkg, role, where) {
+    return new Slice(pkg, role, where);
+  },
+
+  // Determine the packages to load, create Slices for
+  // them, put them in load order, save in slices.
   //
   // contents is a map from role ('use' or 'test') to environment
   // ('client' or 'server') to an array of either package names or
@@ -171,19 +166,19 @@ _.extend(Bundle.prototype, {
   determineLoadOrder: function (contents) {
     var self = this;
 
-    // Packages being used. Map from a role string (eg, "use" or "test")
-    // to "client" or "server" to a package id to a PackageBundlingInfo.
-    var pbiIndex = {use: {client: {}, server: {}},
+    // Package slices being used. Map from a role string (eg, "use" or
+    // "test") to "client" or "server" to a package id to a Slice.
+    var sliceIndex = {use: {client: {}, server: {}},
                     test: {client: {}, server: {}}};
-    var allPbis = [];
+    var slicesUnordered = [];
 
-    // Ensure that pbis exist for a package and its dependencies.
+    // Ensure that slices exist for a package and its dependencies.
     var add = function (pkg, role, where) {
-      if (pbiIndex[role][where][pkg.id])
+      if (sliceIndex[role][where][pkg.id])
         return;
-      var pbi = new PackageBundlingInfo(pkg, role, where);
-      pbiIndex[role][where][pkg.id] = pbi;
-      allPbis.push(pbi);
+      var slice = self._prepSlice(pkg, role, where);
+      sliceIndex[role][where][pkg.id] = slice;
+      slicesUnordered.push(slice);
       _.each(pkg.uses[role][where], function (usedPkgName) {
         var usedPkg = self.getPackage(usedPkgName);
         add(usedPkg, "use", where);
@@ -191,88 +186,80 @@ _.extend(Bundle.prototype, {
     };
 
     // Add the provided roots and all of their dependencies.
-    _.each(contents, function (wToArray, role) {
-      _.each(wToArray, function (ps, where) {
-        _.each(ps, function (packageOrPackageName) {
+    _.each(contents, function (whereToArray, role) {
+      _.each(whereToArray, function (packageList, where) {
+        _.each(packageList, function (packageOrPackageName) {
           var pkg = self.getPackage(packageOrPackageName);
           add(pkg, role, where);
         });
       });
     });
 
-    // Taken an array of PackageBundlingInfo as input. Return an array
-    // with the same PackageBundlingInfo, but sorted such that if X
-    // depends on (uses) Y, and that relationship is not marked as
-    // unordered, Y appears before X in the ordering. Raises an
-    // exception iff there is no such ordering (due to circular
-    // dependency.)
-    var loadOrderPbis = function (pbis) {
-      var id = function (pbi) {
-        return pbi.role + ":" + pbi.where + ":" + pbi.pkg.id;
-      };
-
-      var ret = [];
-      var done = {};
-      var remaining = {};
-      var onStack = {};
-      _.each(pbis, function (pbi) {
-        remaining[id(pbi)] = pbi;
-      });
-
-      while (true) {
-        // Get an arbitrary package from those that remain, or break if
-        // none remain
-        var first = undefined;
-        for (first in remaining)
-          break;
-        if (first === undefined)
-          break;
-        first = remaining[first];
-
-        // Emit that package and all of its dependencies
-        var load = function (pbi) {
-          if (done[id(pbi)])
-            return;
-
-          _.each(pbi.pkg.uses[pbi.role][pbi.where], function (usedPkgName) {
-            if (pbi.pkg.name && pbi.pkg.unordered[usedPkgName])
-              return;
-            var usedPkg = self.getPackage(usedPkgName);
-            var usedPbi = pbiIndex.use[pbi.where][usedPkg.id];
-            if (! usedPbi)
-              throw new Error("Missing pbi?");
-            if (onStack[id(usedPbi)]) {
-              console.error("fatal: circular dependency between packages " +
-                            pbi.pkg.name + " and " + usedPbi.pkg.name);
-              process.exit(1);
-            }
-            onStack[id(usedPbi)] = true;
-            load(usedPbi);
-            delete onStack[id(usedPbi)];
-          });
-          ret.push(pbi);
-          done[id(pbi)] = true;
-          delete remaining[id(pbi)];
-        };
-        load(first);
-      }
-
-      return ret;
+    // Take unorderedSlices as input, put it in order, and save it to
+    // self.slices. "In order" means that if X depends on (uses) Y,
+    // and that relationship is not marked as unordered, Y appears
+    // before X in the ordering. Raises an exception iff there is no
+    // such ordering (due to circular dependency.)
+    var id = function (slice) {
+      return slice.role + ":" + slice.where + ":" + slice.pkg.id;
     };
 
-    self.pbisByLoadOrder = loadOrderPbis(allPbis);
+    var done = {};
+    var remaining = {};
+    var onStack = {};
+    _.each(slicesUnordered, function (slice) {
+      remaining[id(slice)] = slice;
+    });
+
+    while (true) {
+      // Get an arbitrary package from those that remain, or break if
+      // none remain
+      var first = undefined;
+      for (first in remaining)
+        break;
+      if (first === undefined)
+        break;
+      first = remaining[first];
+
+      // Emit that package and all of its dependencies
+      var load = function (slice) {
+        if (done[id(slice)])
+          return;
+
+        _.each(slice.pkg.uses[slice.role][slice.where], function (usedPkgName) {
+          if (slice.pkg.name && slice.pkg.unordered[usedPkgName])
+            return;
+          var usedPkg = self.getPackage(usedPkgName);
+          var usedSlice = sliceIndex.use[slice.where][usedPkg.id];
+          if (! usedSlice)
+            throw new Error("Missing slice?");
+          if (onStack[id(usedSlice)]) {
+            console.error("fatal: circular dependency between packages " +
+                          slice.pkg.name + " and " + usedSlice.pkg.name);
+            process.exit(1);
+          }
+          onStack[id(usedSlice)] = true;
+          load(usedSlice);
+          delete onStack[id(usedSlice)];
+        });
+        self.slices.push(slice);
+        done[id(slice)] = true;
+        delete remaining[id(slice)];
+      };
+      load(first);
+    }
   },
 
   prepNodeModules: function () {
     var self = this;
     var seen = {};
-    _.each(self.pbisByLoadOrder, function (pbi) {
+    _.each(self.slices, function (slice) {
       // Bring npm dependencies up to date. One day this will probably
       // grow into a full-fledged package build step.
-      if (pbi.pkg.npmDependencies && ! seen[pbi.pkg.id]) {
-        seen[pbi.pkg.id] = true;
-        pbi.pkg.installNpmDependencies();
-        self.bundleNodeModules(pbi.pkg);
+      if (slice.pkg.npmDependencies && ! seen[slice.pkg.id]) {
+        seen[slice.pkg.id] = true;
+        slice.pkg.installNpmDependencies();
+        self.bundleNodeModules(slice.pkg);
       }
     });
   },
@@ -301,7 +288,7 @@ _.extend(Bundle.prototype, {
 
   compileSources: function () {
     var self = this;
-    _.each(self.pbisByLoadOrder, function (pbi) {
+    _.each(self.slices, function (slice) {
       /**
        * This is the ultimate low-level API to add data to the bundle.
        *
@@ -333,37 +320,37 @@ _.extend(Bundle.prototype, {
           data = fs.readFileSync(source_file);
         }
 
-        if (options.where && options.where !== pbi.where)
+        if (options.where && options.where !== slice.where)
           throw new Error("'where' is deprecated here and if provided " +
-                          "must be '" + pbi.where + "'");
+                          "must be '" + slice.where + "'");
 
-        pbi.resources.push({
+        slice.resources.push({
           type: options.type,
           data: data,
           servePath: options.path
         });
       };
 
-      var sources = pbi.pkg.sources[pbi.role][pbi.where];
+      var sources = slice.pkg.sources[slice.role][slice.where];
       _.each(sources, function (relPath) {
 
         var ext = path.extname(relPath).substr(1);
-        var handler = pbi.pkg.getSourceHandler(pbi.role, pbi.where, ext);
+        var handler = slice.pkg.getSourceHandler(slice.role, slice.where, ext);
         if (! handler) {
           // If we don't have an extension handler, serve this file
           // as a static resource.
-          pbi.resources.push({
+          slice.resources.push({
             type: "static",
-            data: fs.readFileSync(path.join(pbi.pkg.source_root, relPath)),
-            servePath: path.join(pbi.pkg.serve_root, relPath)
+            data: fs.readFileSync(path.join(slice.pkg.source_root, relPath)),
+            servePath: path.join(slice.pkg.serve_root, relPath)
           });
           return;
         }
 
         handler({add_resource: add_resource},
-                path.join(pbi.pkg.source_root, relPath),
-                path.join(pbi.pkg.serve_root, relPath),
-                pbi.where);
+                path.join(slice.pkg.source_root, relPath),
+                path.join(slice.pkg.serve_root, relPath),
+                slice.where);
       });
     });
   },
@@ -380,22 +367,22 @@ _.extend(Bundle.prototype, {
     // the export list becomes static package metadata so that we
     // don't have to do this.
 
-    _.each(self.pbisByLoadOrder, function (pbi) {
-      var isApp = ! pbi.pkg.name;
+    _.each(self.slices, function (slice) {
+      var isApp = ! slice.pkg.name;
 
       // Compute imports by merging the exports of all of the
       // packages we use. To be eligible to supply an import, a
-      // pbi must presently (a) be named (the app can't supply
+      // slice must presently (a) be named (the app can't supply
       // exports, at least for now); (b) have the "use" role (you
       // can't import symbols from tests and such, primarily
       // because we don't have a good way to name non-"use" roles
       // in JavaScript.) Note that in the case of conflicting
       // symbols, later packages get precedence.
       var imports = {}; // map from symbol to supplying package name
-      _.each(_.values(pbi.pkg.uses[pbi.role][pbi.where]), function (otherPkgName){
+      _.each(_.values(slice.pkg.uses[slice.role][slice.where]), function (otherPkgName){
         var otherPkg = self.getPackage(otherPkgName);
-        if (otherPkg.name && ! pbi.pkg.unordered[otherPkg.name]) {
-          _.each(otherPkg.exports.use[pbi.where], function (symbol) {
+        if (otherPkg.name && ! slice.pkg.unordered[otherPkg.name]) {
+          _.each(otherPkg.exports.use[slice.where], function (symbol) {
             imports[symbol] = otherPkg.name;
           });
         }
@@ -404,7 +391,7 @@ _.extend(Bundle.prototype, {
       // Pull out the JavaScript files
       var inputs = [];
       var others = [];
-      _.each(pbi.resources, function (resource) {
+      _.each(slice.resources, function (resource) {
         if (resource.type === "js") {
           inputs.push({
             source: resource.data.toString('utf8'),
@@ -414,7 +401,7 @@ _.extend(Bundle.prototype, {
           others.push(resource);
         }
       });
-      pbi.resources = others;
+      slice.resources = others;
 
       // Run the link
       var servePathForRole = {
@@ -426,12 +413,12 @@ _.extend(Bundle.prototype, {
         inputFiles: inputs,
         useGlobalNamespace: isApp,
         combinedServePath: isApp ? null :
-          servePathForRole[pbi.role] + pbi.pkg.name + ".js",
+          servePathForRole[slice.role] + slice.pkg.name + ".js",
         // XXX report an error if there is a package called global-imports
         importStubServePath: '/packages/global-imports.js',
         imports: imports,
-        name: pbi.pkg.name || null,
-        forceExport: pbi.pkg.exports[pbi.role][pbi.where]
+        name: slice.pkg.name || null,
+        forceExport: slice.pkg.exports[slice.role][slice.where]
       });
 
       // Save exports for use by future imports
@@ -439,11 +426,11 @@ _.extend(Bundle.prototype, {
       // the future this export computation should be stored on the
       // Package object to start with rather than be computed at
       // link time.
-      pbi.pkg.exports[pbi.role][pbi.where] = results.exports;
+      slice.pkg.exports[slice.role][slice.where] = results.exports;
 
       // Add each output as a resource
       _.each(results.files, function (outputFile) {
-        pbi.resources.push({
+        slice.resources.push({
           type: "js",
           data: new Buffer(outputFile.source, 'utf8'),
           servePath: outputFile.servePath,
@@ -458,13 +445,13 @@ _.extend(Bundle.prototype, {
     var self = this;
 
     // Copy their resources into the bundle in order
-    _.each(self.pbisByLoadOrder, function (pbi) {
-      _.each(pbi.resources, function (resource) {
+    _.each(self.slices, function (slice) {
+      _.each(slice.resources, function (resource) {
         if (resource.type === "js") {
-          self.files[pbi.where][resource.servePath] = resource.data;
-          self.js[pbi.where].push(resource.servePath);
+          self.files[slice.where][resource.servePath] = resource.data;
+          self.js[slice.where].push(resource.servePath);
         } else if (resource.type === "css") {
-          if (pbi.where !== "client")
+          if (slice.where !== "client")
             // XXX might be nice to throw an error here, but then we'd
             // have to make it so that packages.js ignores css files
             // that appear in the server directories in an app tree
@@ -473,13 +460,13 @@ _.extend(Bundle.prototype, {
             // meteor.js?
             return;
 
-          self.files[pbi.where][resource.servePath] = resource.data;
+          self.files[slice.where][resource.servePath] = resource.data;
           self.css.push(resource.servePath);
         } else if (resource.type === "static") {
-          self.files[pbi.where][resource.servePath] = resource.data;
-          self.static[pbi.where].push(resource.servePath);
+          self.files[slice.where][resource.servePath] = resource.data;
+          self.static[slice.where].push(resource.servePath);
         } else if (resource.type === "head" || resource.type === "body") {
-          if (pbi.where !== "client")
+          if (slice.where !== "client")
             throw new Error("HTML segments can only go to the client");
           self[resource.type].push(resource.data);
         } else {
@@ -568,9 +555,9 @@ _.extend(Bundle.prototype, {
     var self = this;
     var ret = [];
 
-    _.each(self.pbisByLoadOrder, function (pbi) {
-      if (! pbi.pkg.name)
-        ret = _.union(ret, pbi.pkg.registeredExtensions(pbi.role, pbi.where));
+    _.each(self.slices, function (slice) {
+      if (! slice.pkg.name)
+        ret = _.union(ret, slice.pkg.registeredExtensions(slice.role, slice.where));
     });
 
     return ret;
@@ -769,12 +756,12 @@ _.extend(Bundle.prototype, {
     dependencies_json.extensions = self._app_extensions();
     dependencies_json.exclude = _.pluck(ignore_files, 'source');
     dependencies_json.packages = {};
-    _.each(_.values(self.pbisByLoadOrder), function (pbi) {
-      if (pbi.pkg.name) {
-        dependencies_json.packages[pbi.pkg.name] = _.union(
-          dependencies_json.packages[pbi.pkg.name] || [],
-          pbi.pkg.extraDependencies,
-          pbi.pkg.sources[pbi.role][pbi.where]
+    _.each(_.values(self.slices), function (slice) {
+      if (slice.pkg.name) {
+        dependencies_json.packages[slice.pkg.name] = _.union(
+          dependencies_json.packages[slice.pkg.name] || [],
+          slice.pkg.extraDependencies,
+          slice.pkg.sources[slice.role][slice.where]
         );
       }
     });
