@@ -92,11 +92,6 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   // load there.
   self.presentInEnvironment = {client: false, server: false};
 
-  // Tracks which source files have already been added, so we don't
-  // add them again. Map from where ("client", "server") to a source
-  // file name (relative to the package) to true
-  self.sourceFileAdded = {client: {}, server: {}};
-
   // All of the data provided by this package for eventual inclusion
   // in the bundle. Map from where ("client", "server") to a list of
   // objects each with these keys:
@@ -121,132 +116,7 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   self.dependencies = {};
   if (pkg.name)
     self.dependencies['package.js'] = true;
-
-  // the API available from on_use / on_test handlers
-  self.api = {
-    use: function (names, where, options) {
-      options = _.clone(options || {});
-
-      if (!(names instanceof Array))
-        names = names ? [names] : [];
-
-      _.each(names, function (name) {
-        self.bundle.use(name, where, options);
-      });
-    },
-
-    add_files: function (paths, where) {
-      if (!(paths instanceof Array))
-        paths = paths ? [paths] : [];
-      if (!(where instanceof Array))
-        where = where ? [where] : [];
-
-      _.each(where, function (w) {
-        _.each(paths, function (rel_path) {
-          self.add_file(rel_path, w);
-        });
-      });
-    },
-
-    exportSymbol: function (symbols, where) {
-      // XXX remove
-    },
-
-    // Report an error. It should be a single human-readable
-    // string. If any errors are reported, the bundling is considered
-    // to have failed.
-    error: function (message) {
-      self.bundle.errors.push(message);
-    },
-
-    /**
-     * This is the ultimate low-level API to add data to the bundle.
-     *
-     * type: "js", "css", "head", "body", "static"
-     *
-     * where: an environment, or a list of one or more environments
-     * ("client", "server")
-     *
-     * path: the (absolute) path at which the file will be
-     * served. ignored in the case of "head" and "body".
-     *
-     * source_file: the absolute path to read the data from. if path
-     * is set, will default based on that. overridden by data.
-     *
-     * data: the data to send. overrides source_file if present. you
-     * must still set path (except for "head" and "body".)
-     */
-    add_resource: function (options) {
-      var source_file = options.source_file || options.path;
-
-      var data;
-      if (options.data) {
-        data = options.data;
-        if (!(data instanceof Buffer)) {
-          if (!(typeof data === "string"))
-            throw new Error("Bad type for data");
-          data = new Buffer(data, 'utf8');
-        }
-      } else {
-        if (!source_file)
-          throw new Error("Need either source_file or data");
-        data = fs.readFileSync(source_file);
-      }
-
-      var where = options.where;
-      if (typeof where === "string")
-        where = [where];
-      if (! where)
-        throw new Error("Must specify where");
-
-      _.each(where, function (w) {
-        self.resources[w].push({
-          type: options.type,
-          data: data,
-          servePath: options.path
-        });
-      });
-    }
-  };
-
-  if (! (pkg.name === "meteor" && self.role === "use"))
-    self.api.use("meteor");
 };
-
-_.extend(PackageBundlingInfo.prototype, {
-  // Find the function that should be used to handle a source file
-  // found in this package. We'll use handlers that are defined in
-  // this package and in its immediate dependencies. ('extension'
-  // should be the extension of the file without a leading dot.)
-  add_file: function (rel_path, where) {
-    var self = this;
-
-    if (self.sourceFileAdded[where][rel_path])
-      return;
-    self.sourceFileAdded[where][rel_path] = true;
-
-    var ext = path.extname(rel_path).substr(1);
-    var handler = self.pkg.getSourceHandler(self.role, where, ext);
-    if (! handler) {
-      // If we don't have an extension handler, serve this file
-      // as a static resource.
-      self.api.add_resource({
-        type: "static",
-        path: path.join(self.pkg.serve_root, rel_path),
-        data: fs.readFileSync(path.join(self.pkg.source_root, rel_path)),
-        where: where
-      });
-      return;
-    }
-
-    handler(self.api,
-            path.join(self.pkg.source_root, rel_path),
-            path.join(self.pkg.serve_root, rel_path),
-            where);
-
-    self.dependencies[rel_path] = true;
-  }
-});
 
 ///////////////////////////////////////////////////////////////////////////////
 // Bundle
@@ -509,9 +379,77 @@ _.extend(Bundle.prototype, {
         if (! isPresent)
           return;
 
+        /**
+         * This is the ultimate low-level API to add data to the bundle.
+         *
+         * type: "js", "css", "head", "body", "static"
+         *
+         * where: an environment, or a list of one or more environments
+         * ("client", "server")
+         *
+         * path: the (absolute) path at which the file will be
+         * served. ignored in the case of "head" and "body".
+         *
+         * source_file: the absolute path to read the data from. if path
+         * is set, will default based on that. overridden by data.
+         *
+         * data: the data to send. overrides source_file if present. you
+         * must still set path (except for "head" and "body".)
+         */
+        var add_resource = function (options) {
+          var source_file = options.source_file || options.path;
+
+          var data;
+          if (options.data) {
+            data = options.data;
+            if (!(data instanceof Buffer)) {
+              if (!(typeof data === "string"))
+                throw new Error("Bad type for data");
+              data = new Buffer(data, 'utf8');
+            }
+          } else {
+            if (!source_file)
+              throw new Error("Need either source_file or data");
+            data = fs.readFileSync(source_file);
+          }
+
+          var where = options.where;
+          if (typeof where === "string")
+            where = [where];
+          if (! where)
+            throw new Error("Must specify where");
+
+          _.each(where, function (w) {
+            pbi.resources[w].push({
+              type: options.type,
+              data: data,
+              servePath: options.path
+            });
+          });
+        };
+
         var sources = pbi.pkg.sources[pbi.role][where];
         _.each(sources, function (relPath) {
-          pbi.add_file(relPath, where);
+
+          var ext = path.extname(relPath).substr(1);
+          var handler = pbi.pkg.getSourceHandler(pbi.role, where, ext);
+          if (! handler) {
+            // If we don't have an extension handler, serve this file
+            // as a static resource.
+            pbi.resources[where].push({
+              type: "static",
+              data: fs.readFileSync(path.join(pbi.pkg.source_root, relPath)),
+              servePath: path.join(pbi.pkg.serve_root, relPath)
+            });
+            return;
+          }
+
+          handler({add_resource: add_resource},
+                  path.join(pbi.pkg.source_root, relPath),
+                  path.join(pbi.pkg.serve_root, relPath),
+                  where);
+
+          pbi.dependencies[relPath] = true;
         });
       });
     });
