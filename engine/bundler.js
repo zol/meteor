@@ -195,10 +195,26 @@ _.extend(Bundle.prototype, {
   determineLoadOrder: function (contents) {
     var self = this;
 
+    // Ensure that pbis exist for a package and its dependencies. Set
+    // 'presentInEnvironment' flags to determine which parts of the
+    // package we'll load.
+    var add = function (pkg, role, where) {
+      var pbi = self._get_bundling_info_for_package(pkg, role);
+      if (! pbi.presentInEnvironment[where]) {
+        pbi.presentInEnvironment[where] = true;
+        _.each(pkg.uses[role][where], function (usedPkgName) {
+          var usedPkg = self.getPackage(usedPkgName);
+          add(usedPkg, "use", where);
+        });
+      }
+    };
+
+    // Add the provided roots and all of their dependencies.
     _.each(contents, function (wToArray, role) {
       _.each(wToArray, function (ps, where) {
         _.each(ps, function (packageOrPackageName) {
-          self.use(packageOrPackageName, where, role);
+          var pkg = self.getPackage(packageOrPackageName);
+          add(pkg, role, where);
         });
       });
     });
@@ -297,31 +313,6 @@ _.extend(Bundle.prototype, {
       process.exit(1);
     }
     return pkg;
-  },
-
-  // Call to add a package to this bundle. The first argument may be
-  // either a package or a package name. where is exactly one of
-  // 'client' or 'server'. role is exactly one of 'use' or 'test'.
-  use: function (packageOrPackageName, where, role) {
-    var self = this;
-
-    // Find the package, or exit
-    // Is identify if 'packageOrPackageName
-    var pkg = self.getPackage(packageOrPackageName);
-
-    // Find the bundling state for this package and role, creating if
-    // necessary
-    var pbi = self._get_bundling_info_for_package(pkg, role);
-
-    // Mark this slice as used
-    if (pbi.presentInEnvironment[where])
-      return; // already did this one -- avoid recursing forever (below)
-    pbi.presentInEnvironment[where] = true;
-
-    // Bring in other required packages
-    _.each(pkg.uses[role][where], function (usedPkgName) {
-      self.use(usedPkgName, where, "use");
-    });
   },
 
   // map a package's generated node_modules directory to the package
