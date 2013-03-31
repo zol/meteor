@@ -193,17 +193,7 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
     // @param symbols String (eg "Foo", "Foo.bar") or array of String
     // @param where 'client', 'server', or an array of those
     exportSymbol: function (symbols, where) {
-      if (!(symbols instanceof Array))
-        symbols = symbols ? [symbols] : [];
-      if (!(where instanceof Array))
-        where = where ? [where] : [];
-
-      _.each(where, function (w) {
-        _.each(symbols, function (s) {
-          self.forceExport[w].push(s);
-        });
-        self.forceExport[w] = _.uniq(self.forceExport[w]);
-      });
+      // XXX remove
     },
 
     // Report an error. It should be a single human-readable
@@ -621,7 +611,7 @@ _.extend(Bundle.prototype, {
           importStubServePath: '/packages/global-imports.js',
           imports: imports,
           name: pbi.pkg.name || null,
-          forceExport: pbi.forceExport[where]
+          forceExport: pbi.pkg.exports[pbi.role][where]
         });
 
         // Save exports for use by future imports
