@@ -206,18 +206,6 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
       });
     },
 
-    // Return a list of all of the extension that indicate source files
-    // inside this package, INCLUDING leading dots.
-    registered_extensions: function () {
-      var ret = _.keys(self.pkg.extensions);
-
-      _.each(self.using.use, function (otherPbi) {
-        ret = _.union(ret, _.keys(otherPbi.pkg.extensions));
-      });
-
-      return _.map(ret, function (x) {return "." + x;});
-    },
-
     // Report an error. It should be a single human-readable
     // string. If any errors are reported, the bundling is considered
     // to have failed.
@@ -778,8 +766,13 @@ _.extend(Bundle.prototype, {
 
     _.each(self.packageBundlingInfo, function (idToPbiMap) {
       _.each(idToPbiMap, function (pbi) {
-        if (! pbi.pkg.name)
-          ret = _.union(ret, pbi.api.registered_extensions());
+        if (! pbi.pkg.name) {
+          _.each(["use", "test"], function (role) {
+            _.each(["client", "server"], function (where) {
+              ret = _.union(ret, pbi.pkg.registeredExtensions(role, where));
+            });
+          });
+        }
       });
     });
 

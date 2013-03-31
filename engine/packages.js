@@ -15,7 +15,7 @@ var fs = require('fs');
 //
 // To create a package object from an app directory:
 //   var pkg = new Package;
-//   pkg.init_from_app_dir(app_dir);
+//   pkg.initFromAppDir(app_dir);
 
 var next_package_id = 1;
 var Package = function () {
@@ -276,14 +276,14 @@ _.extend(Package.prototype, {
       path.join(warehouse.getWarehouseDir(), 'packages', name, version));
   },
 
-  init_from_app_dir: function (app_dir, ignore_files) {
+  initFromAppDir: function (app_dir, ignore_files) {
     var self = this;
     self.name = null;
     self.source_root = app_dir;
     self.serve_root = path.sep;
 
-    var sources_except = function (api, except, tests) {
-      var allSources = self._scan_for_sources(api, ignore_files || []);
+    var sources_except = function (role, where, except, tests) {
+      var allSources = self._scan_for_sources(role, where, ignore_files || []);
       var withoutAppPackages = _.reject(allSources, function (sourcePath) {
         // Skip files that are in app packages. (Directories named "packages"
         // lower in the tree are OK.)
@@ -298,26 +298,48 @@ _.extend(Package.prototype, {
       });
     };
 
+    // standard client packages (for now), for the classic meteor
+    // stack.
+    // XXX remove and make everyone explicitly declare all dependencies
+    var packages = ['deps', 'session', 'livedata', 'mongo-livedata',
+                    'spark', 'templating', 'startup', 'past'];
+    packages =
+      _.union(packages,
+              require(path.join(__dirname, 'project.js')).
+              get_packages(app_dir));
+
+    _.each(["use", "test"], function (role) {
+      _.each(["client", "server"], function (where) {
+        // Note that technically to match the historical behavior, we
+        // should include a dependency of the 'test' role of the
+        // package on the 'use' role. But we don't have a way to do
+        // that, since these are strings and this package is
+        // anonymous. But this shouldn't matter since this form of app
+        // testing never actually shipped.
+        self.uses[role][where] = packages;
+      });
+    });
+
+    self.sources.use.client = sources_except("use", "client", "server");
+    self.sources.use.server = sources_except("use", "server", "client");
+    self.sources.test.client =
+      sources_except("test", "client", "server", true);
+    self.sources.test.server =
+      sources_except("test", "server", "client", true);
+
+    // Old style
+    // XXX remove
     self.packageFacade.on_use(function (api) {
-      // -- Packages --
-
-      // standard client packages (for now), for the classic meteor
-      // stack -- has to come before user packages, because we don't
-      // (presently) require packages to declare dependencies on
-      // 'standard meteor stuff' like minimongo.
-      api.use(['deps', 'session', 'livedata', 'mongo-livedata', 'spark',
-               'templating', 'startup', 'past']);
-      api.use(require(path.join(__dirname, 'project.js')).get_packages(app_dir));
-
-      // -- Source files --
-      api.add_files(sources_except(api, "server"), "client");
-      api.add_files(sources_except(api, "client"), "server");
+      api.use(packages);
+      api.add_files(self.sources.use.client, "client");
+      api.add_files(self.sources.use.server, "server");
     });
 
     self.packageFacade.on_test(function (api) {
+      api.use(packages);
       api.use(self);
-      api.add_files(sources_except(api, "server", true), "client");
-      api.add_files(sources_except(api, "client", true), "server");
+      api.add_files(self.sources.test.client, "client");
+      api.add_files(self.sources.test.server, "server");
     });
   },
 
@@ -326,12 +348,16 @@ _.extend(Package.prototype, {
   // source_root. Ignore files that match a regexp in the ignore_files
   // array, if given. As a special case (ugh), push all html files to
   // the head of the list.
-  _scan_for_sources: function (api, ignore_files) {
+  //
+  // role should be 'use' or 'test'
+  // where should be 'client' or 'server'
+  _scan_for_sources: function (role, where, ignore_files) {
     var self = this;
 
     // find everything in tree, sorted depth-first alphabetically.
-    var file_list = files.file_list_sync(self.source_root,
-                                         api.registered_extensions());
+    var file_list =
+      files.file_list_sync(self.source_root,
+                           self.registeredExtensions(role, where));
     file_list = _.reject(file_list, function (file) {
       return _.any(ignore_files || [], function (pattern) {
         return file.match(pattern);
@@ -386,6 +412,23 @@ _.extend(Package.prototype, {
 
   npmDir: function () {
     return path.join(this.source_root, '.npm');
+  },
+
+  // Return a list of all of the extension that indicate source files
+  // inside this package, INCLUDING leading dots. Computed based on
+  // this.uses, so should only be called once that has been set.
+  //
+  // 'role' should be 'use' or 'test'. 'where' should be 'client' or 'server'.
+  registeredExtensions: function (role, where) {
+    var self = this;
+    var ret = _.keys(self.extensions);
+
+    _.each(self.uses[role][where], function (pkgName) {
+      var pkg = packages.get(pkgName);
+      ret = _.union(ret, _.keys(pkg.extensions));
+    });
+
+    return _.map(ret, function (x) {return "." + x;});
   }
 });
 
@@ -431,7 +474,7 @@ var packages = module.exports = {
   // ignore when scanning for source files.)
   get_for_app: function (app_dir, ignore_files) {
     var pkg = new Package;
-    pkg.init_from_app_dir(app_dir, ignore_files || []);
+    pkg.initFromAppDir(app_dir, ignore_files || []);
     return pkg;
   },
 
