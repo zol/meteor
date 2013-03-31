@@ -71,22 +71,20 @@ var ignore_files = [
 // depends on P. This would otherwise be a circular dependency.) In
 // the future, we should probably just model tests as totally separate
 // packages.
-var PackageBundlingInfo = function (pkg, role) {
+var PackageBundlingInfo = function (pkg, role, where) {
   var self = this;
   self.pkg = pkg;
 
   // "use" in the normal case (this object represents the instance of
   // a package in a bundle), or "test" if this instead represents an
   // instance of the package's tests.
-  self.role = role || "use";
+  self.role = role;
 
-  // True for each possible 'where' if in fact we are being asked to
-  // load there.
-  self.presentInEnvironment = {client: false, server: false};
+  // "client" or "server"
+  self.where = where;
 
   // All of the data provided by this package for eventual inclusion
-  // in the bundle. Map from where ("client", "server") to a list of
-  // objects each with these keys:
+  // in the bundle. A list of objects with these keys:
   //
   // type: "js", "css", "head", "body", "static"
   //
@@ -102,7 +100,7 @@ var PackageBundlingInfo = function (pkg, role) {
   // honored for "static", ignored for "head" and "body", sometimes
   // honored for JavaScript but ignored if we are concatenating (for
   // minification or linking purposes.)
-  self.resources = {client: [], server: []};
+  self.resources = [];
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -174,27 +172,22 @@ _.extend(Bundle.prototype, {
     var self = this;
 
     // Packages being used. Map from a role string (eg, "use" or "test")
-    // to a package id to a PackageBundlingInfo.
-    var pbiIndex = {use: {}, test: {}};
-    var ensurePbi = function (pkg, role) {
-      var self = this;
-      var pbi = pbiIndex[role][pkg.id];
-      return pbi ? pbi :
-        (pbiIndex[role][pkg.id] = new PackageBundlingInfo(pkg, role));
-    };
+    // to "client" or "server" to a package id to a PackageBundlingInfo.
+    var pbiIndex = {use: {client: {}, server: {}},
+                    test: {client: {}, server: {}}};
+    var allPbis = [];
 
-    // Ensure that pbis exist for a package and its dependencies. Set
-    // 'presentInEnvironment' flags to determine which parts of the
-    // package we'll load.
+    // Ensure that pbis exist for a package and its dependencies.
     var add = function (pkg, role, where) {
-      var pbi = ensurePbi(pkg, role);
-      if (! pbi.presentInEnvironment[where]) {
-        pbi.presentInEnvironment[where] = true;
-        _.each(pkg.uses[role][where], function (usedPkgName) {
-          var usedPkg = self.getPackage(usedPkgName);
-          add(usedPkg, "use", where);
-        });
-      }
+      if (pbiIndex[role][where][pkg.id])
+        return;
+      var pbi = new PackageBundlingInfo(pkg, role, where);
+      pbiIndex[role][where][pkg.id] = pbi;
+      allPbis.push(pbi);
+      _.each(pkg.uses[role][where], function (usedPkgName) {
+        var usedPkg = self.getPackage(usedPkgName);
+        add(usedPkg, "use", where);
+      });
     };
 
     // Add the provided roots and all of their dependencies.
@@ -209,13 +202,13 @@ _.extend(Bundle.prototype, {
 
     // Taken an array of PackageBundlingInfo as input. Return an array
     // with the same PackageBundlingInfo, but sorted such that if X
-    // depends on (uses) Y in any environment, and that relationship is
-    // not marked as unordered, Y appears before X in the ordering. Raises
-    // an exception iff there is no such ordering (due to circular
+    // depends on (uses) Y, and that relationship is not marked as
+    // unordered, Y appears before X in the ordering. Raises an
+    // exception iff there is no such ordering (due to circular
     // dependency.)
     var loadOrderPbis = function (pbis) {
       var id = function (pbi) {
-        return pbi.role + ":" + pbi.pkg.id;
+        return pbi.role + ":" + pbi.where + ":" + pbi.pkg.id;
       };
 
       var ret = [];
@@ -241,21 +234,21 @@ _.extend(Bundle.prototype, {
           if (done[id(pbi)])
             return;
 
-          _.each(_.values(pbi.pkg.uses[pbi.role]), function (pkgNames, w) {
-            _.each(pkgNames, function (usedPkgName) {
-              if (pbi.pkg.name && pbi.pkg.unordered[usedPkgName])
-                return;
-              var usedPkg = self.getPackage(usedPkgName);
-              var usedPbi = ensurePbi(usedPkg, "use");
-              if (onStack[id(usedPbi)]) {
-                console.error("fatal: circular dependency between packages " +
-                              pbi.pkg.name + " and " + usedPbi.pkg.name);
-                process.exit(1);
-              }
-              onStack[id(usedPbi)] = true;
-              load(usedPbi);
-              delete onStack[id(usedPbi)];
-            });
+          _.each(pbi.pkg.uses[pbi.role][pbi.where], function (usedPkgName) {
+            if (pbi.pkg.name && pbi.pkg.unordered[usedPkgName])
+              return;
+            var usedPkg = self.getPackage(usedPkgName);
+            var usedPbi = pbiIndex.use[pbi.where][usedPkg.id];
+            if (! usedPbi)
+              throw new Error("Missing pbi?");
+            if (onStack[id(usedPbi)]) {
+              console.error("fatal: circular dependency between packages " +
+                            pbi.pkg.name + " and " + usedPbi.pkg.name);
+              process.exit(1);
+            }
+            onStack[id(usedPbi)] = true;
+            load(usedPbi);
+            delete onStack[id(usedPbi)];
           });
           ret.push(pbi);
           done[id(pbi)] = true;
@@ -267,12 +260,7 @@ _.extend(Bundle.prototype, {
       return ret;
     };
 
-    var pbis = [];
-    _.each(_.values(pbiIndex), function (idToPbiMap) {
-      pbis = pbis.concat(_.values(idToPbiMap));
-    });
-
-    self.pbisByLoadOrder = loadOrderPbis(pbis);
+    self.pbisByLoadOrder = loadOrderPbis(allPbis);
   },
 
   prepNodeModules: function () {
@@ -314,80 +302,68 @@ _.extend(Bundle.prototype, {
   compileSources: function () {
     var self = this;
     _.each(self.pbisByLoadOrder, function (pbi) {
-      _.each(pbi.presentInEnvironment, function (isPresent, where) {
-        if (! isPresent)
-          return;
+      /**
+       * This is the ultimate low-level API to add data to the bundle.
+       *
+       * type: "js", "css", "head", "body", "static"
+       *
+       * path: the (absolute) path at which the file will be
+       * served. ignored in the case of "head" and "body".
+       *
+       * source_file: the absolute path to read the data from. if path
+       * is set, will default based on that. overridden by data.
+       *
+       * data: the data to send. overrides source_file if present. you
+       * must still set path (except for "head" and "body".)
+       */
+      var add_resource = function (options) {
+        var source_file = options.source_file || options.path;
 
-        /**
-         * This is the ultimate low-level API to add data to the bundle.
-         *
-         * type: "js", "css", "head", "body", "static"
-         *
-         * where: an environment, or a list of one or more environments
-         * ("client", "server")
-         *
-         * path: the (absolute) path at which the file will be
-         * served. ignored in the case of "head" and "body".
-         *
-         * source_file: the absolute path to read the data from. if path
-         * is set, will default based on that. overridden by data.
-         *
-         * data: the data to send. overrides source_file if present. you
-         * must still set path (except for "head" and "body".)
-         */
-        var add_resource = function (options) {
-          var source_file = options.source_file || options.path;
-
-          var data;
-          if (options.data) {
-            data = options.data;
-            if (!(data instanceof Buffer)) {
-              if (!(typeof data === "string"))
-                throw new Error("Bad type for data");
-              data = new Buffer(data, 'utf8');
-            }
-          } else {
-            if (!source_file)
-              throw new Error("Need either source_file or data");
-            data = fs.readFileSync(source_file);
+        var data;
+        if (options.data) {
+          data = options.data;
+          if (!(data instanceof Buffer)) {
+            if (!(typeof data === "string"))
+              throw new Error("Bad type for data");
+            data = new Buffer(data, 'utf8');
           }
+        } else {
+          if (!source_file)
+            throw new Error("Need either source_file or data");
+          data = fs.readFileSync(source_file);
+        }
 
-          var where = options.where;
-          if (typeof where === "string")
-            where = [where];
-          if (! where)
-            throw new Error("Must specify where");
+        if (options.where && options.where !== pbi.where)
+          throw new Error("'where' is deprecated here and if provided " +
+                          "must be '" + pbi.where + "'");
 
-          _.each(where, function (w) {
-            pbi.resources[w].push({
-              type: options.type,
-              data: data,
-              servePath: options.path
-            });
-          });
-        };
-
-        var sources = pbi.pkg.sources[pbi.role][where];
-        _.each(sources, function (relPath) {
-
-          var ext = path.extname(relPath).substr(1);
-          var handler = pbi.pkg.getSourceHandler(pbi.role, where, ext);
-          if (! handler) {
-            // If we don't have an extension handler, serve this file
-            // as a static resource.
-            pbi.resources[where].push({
-              type: "static",
-              data: fs.readFileSync(path.join(pbi.pkg.source_root, relPath)),
-              servePath: path.join(pbi.pkg.serve_root, relPath)
-            });
-            return;
-          }
-
-          handler({add_resource: add_resource},
-                  path.join(pbi.pkg.source_root, relPath),
-                  path.join(pbi.pkg.serve_root, relPath),
-                  where);
+        pbi.resources.push({
+          type: options.type,
+          data: data,
+          servePath: options.path
         });
+      };
+
+      var sources = pbi.pkg.sources[pbi.role][pbi.where];
+      _.each(sources, function (relPath) {
+
+        var ext = path.extname(relPath).substr(1);
+        var handler = pbi.pkg.getSourceHandler(pbi.role, pbi.where, ext);
+        if (! handler) {
+          // If we don't have an extension handler, serve this file
+          // as a static resource.
+          pbi.resources.push({
+            type: "static",
+            data: fs.readFileSync(path.join(pbi.pkg.source_root, relPath)),
+            servePath: path.join(pbi.pkg.serve_root, relPath)
+          });
+          return;
+        }
+
+        handler({add_resource: add_resource},
+                path.join(pbi.pkg.source_root, relPath),
+                path.join(pbi.pkg.serve_root, relPath),
+                pbi.where);
       });
     });
   },
@@ -404,76 +380,73 @@ _.extend(Bundle.prototype, {
     // the export list becomes static package metadata so that we
     // don't have to do this.
 
-    // For each role, for each package, for each environment
     _.each(self.pbisByLoadOrder, function (pbi) {
-      _.each(_.keys(pbi.resources), function (where) {
-        var isApp = ! pbi.pkg.name;
+      var isApp = ! pbi.pkg.name;
 
-        // Compute imports by merging the exports of all of the
-        // packages we use. To be eligible to supply an import, a
-        // pbi must presently (a) be named (the app can't supply
-        // exports, at least for now); (b) have the "use" role (you
-        // can't import symbols from tests and such, primarily
-        // because we don't have a good way to name non-"use" roles
-        // in JavaScript.) Note that in the case of conflicting
-        // symbols, later packages get precedence.
-        var imports = {}; // map from symbol to supplying package name
-        _.each(_.values(pbi.pkg.uses[pbi.role][where]), function (otherPkgName){
-          var otherPkg = self.getPackage(otherPkgName);
-          if (otherPkg.name && ! pbi.pkg.unordered[otherPkg.name]) {
-            _.each(otherPkg.exports.use[where], function (symbol) {
-              imports[symbol] = otherPkg.name;
-            });
-          }
-        });
-
-        // Pull out the JavaScript files
-        var inputs = [];
-        var others = [];
-        _.each(pbi.resources[where], function (resource) {
-          if (resource.type === "js") {
-            inputs.push({
-              source: resource.data.toString('utf8'),
-              servePath: resource.servePath
-            });
-          } else {
-            others.push(resource);
-          }
-        });
-        pbi.resources[where] = others;
-
-        // Run the link
-        var servePathForRole = {
-          use: "/packages/",
-          test: "/package-tests/"
-        };
-
-        var results = linker.link({
-          inputFiles: inputs,
-          useGlobalNamespace: isApp,
-          combinedServePath: isApp ? null :
-            servePathForRole[pbi.role] + pbi.pkg.name + ".js",
-          // XXX report an error if there is a package called global-imports
-          importStubServePath: '/packages/global-imports.js',
-          imports: imports,
-          name: pbi.pkg.name || null,
-          forceExport: pbi.pkg.exports[pbi.role][where]
-        });
-
-        // Save exports for use by future imports
-        // XXX saving on the Package object is a temporary hack ... In
-        // the future this export computation should be stored on the
-        // Package object to start with rather than be computed at
-        // link time.
-        pbi.pkg.exports[pbi.role][where] = results.exports;
-
-        // Add each output as a resource
-        _.each(results.files, function (outputFile) {
-          pbi.resources[where].push({
-            type: "js",
-            data: new Buffer(outputFile.source, 'utf8'),
-              servePath: outputFile.servePath,
+      // Compute imports by merging the exports of all of the
+      // packages we use. To be eligible to supply an import, a
+      // pbi must presently (a) be named (the app can't supply
+      // exports, at least for now); (b) have the "use" role (you
+      // can't import symbols from tests and such, primarily
+      // because we don't have a good way to name non-"use" roles
+      // in JavaScript.) Note that in the case of conflicting
+      // symbols, later packages get precedence.
+      var imports = {}; // map from symbol to supplying package name
+      _.each(_.values(pbi.pkg.uses[pbi.role][pbi.where]), function (otherPkgName){
+        var otherPkg = self.getPackage(otherPkgName);
+        if (otherPkg.name && ! pbi.pkg.unordered[otherPkg.name]) {
+          _.each(otherPkg.exports.use[pbi.where], function (symbol) {
+            imports[symbol] = otherPkg.name;
           });
+        }
+      });
+
+      // Pull out the JavaScript files
+      var inputs = [];
+      var others = [];
+      _.each(pbi.resources, function (resource) {
+        if (resource.type === "js") {
+          inputs.push({
+            source: resource.data.toString('utf8'),
+            servePath: resource.servePath
+          });
+        } else {
+          others.push(resource);
+        }
+      });
+      pbi.resources = others;
+
+      // Run the link
+      var servePathForRole = {
+        use: "/packages/",
+        test: "/package-tests/"
+      };
+
+      var results = linker.link({
+        inputFiles: inputs,
+        useGlobalNamespace: isApp,
+        combinedServePath: isApp ? null :
+          servePathForRole[pbi.role] + pbi.pkg.name + ".js",
+        // XXX report an error if there is a package called global-imports
+        importStubServePath: '/packages/global-imports.js',
+        imports: imports,
+        name: pbi.pkg.name || null,
+        forceExport: pbi.pkg.exports[pbi.role][pbi.where]
+      });
+
+      // Save exports for use by future imports
+      // XXX saving on the Package object is a temporary hack ... In
+      // the future this export computation should be stored on the
+      // Package object to start with rather than be computed at
+      // link time.
+      pbi.pkg.exports[pbi.role][pbi.where] = results.exports;
+
+      // Add each output as a resource
+      _.each(results.files, function (outputFile) {
+        pbi.resources.push({
+          type: "js",
+          data: new Buffer(outputFile.source, 'utf8'),
+          servePath: outputFile.servePath,
         });
       });
     });
@@ -486,37 +459,32 @@ _.extend(Bundle.prototype, {
 
     // Copy their resources into the bundle in order
     _.each(self.pbisByLoadOrder, function (pbi) {
-      _.each(pbi.resources, function (resources, where) {
-        _.each(resources, function (resource) {
+      _.each(pbi.resources, function (resource) {
+        if (resource.type === "js") {
+          self.files[pbi.where][resource.servePath] = resource.data;
+          self.js[pbi.where].push(resource.servePath);
+        } else if (resource.type === "css") {
+          if (pbi.where !== "client")
+            // XXX might be nice to throw an error here, but then we'd
+            // have to make it so that packages.js ignores css files
+            // that appear in the server directories in an app tree
 
-          if (resource.type === "js") {
-            if (where !== "client" && where !== "server")
-              throw new Error("Invalid environment");
-            self.files[where][resource.servePath] = resource.data;
-            self.js[where].push(resource.servePath);
-          } else if (resource.type === "css") {
-            if (where !== "client")
-              // XXX might be nice to throw an error here, but then we'd
-              // have to make it so that packages.js ignores css files
-              // that appear in the server directories in an app tree
+            // XXX XXX can't we easily do that in the css handler in
+            // meteor.js?
+            return;
 
-              // XXX XXX can't we easily do that in the css handler in
-              // meteor.js?
-              return;
-
-            self.files[where][resource.servePath] = resource.data;
-            self.css.push(resource.servePath);
-          } else if (resource.type === "static") {
-            self.files[where][resource.servePath] = resource.data;
-            self.static[where].push(resource.servePath);
-          } else if (resource.type === "head" || resource.type === "body") {
-            if (where !== "client")
-              throw new Error("HTML segments can only go to the client");
-            self[resource.type].push(resource.data);
-          } else {
-            throw new Error("Unknown type " + resource.type);
-          }
-        });
+          self.files[pbi.where][resource.servePath] = resource.data;
+          self.css.push(resource.servePath);
+        } else if (resource.type === "static") {
+          self.files[pbi.where][resource.servePath] = resource.data;
+          self.static[pbi.where].push(resource.servePath);
+        } else if (resource.type === "head" || resource.type === "body") {
+          if (pbi.where !== "client")
+            throw new Error("HTML segments can only go to the client");
+          self[resource.type].push(resource.data);
+        } else {
+          throw new Error("Unknown type " + resource.type);
+        }
       });
     });
   },
@@ -601,13 +569,8 @@ _.extend(Bundle.prototype, {
     var ret = [];
 
     _.each(self.pbisByLoadOrder, function (pbi) {
-      if (! pbi.pkg.name) {
-        _.each(["use", "test"], function (role) {
-          _.each(["client", "server"], function (where) {
-            ret = _.union(ret, pbi.pkg.registeredExtensions(role, where));
-          });
-        });
-      }
+      if (! pbi.pkg.name)
+        ret = _.union(ret, pbi.pkg.registeredExtensions(pbi.role, pbi.where));
     });
 
     return ret;
@@ -811,10 +774,7 @@ _.extend(Bundle.prototype, {
         dependencies_json.packages[pbi.pkg.name] = _.union(
           dependencies_json.packages[pbi.pkg.name] || [],
           pbi.pkg.extraDependencies,
-          pbi.presentInEnvironment.server ?
-            pbi.pkg.sources[pbi.role].server : [],
-          pbi.presentInEnvironment.client ?
-            pbi.pkg.sources[pbi.role].client : []
+          pbi.pkg.sources[pbi.role][pbi.where]
         );
       }
     });
