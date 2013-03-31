@@ -9,6 +9,18 @@ var packageDot = function (name) {
     return "Package['" + name + "']";
 };
 
+var generateBoundary = function () {
+  // XXX we really want to call Random.id() here but we don't yet have
+  // infrastructure for including Meteor packages into the tools.
+  var alphabet = "23456789ABCDEFGHJKLMNPQRSTWXYZabcdefghijkmnopqrstuvwxyz";
+  var digits = [];
+  for (var i = 0; i < 17; i++) {
+    var index = Math.floor(Math.random() * alphabet.length);
+    digits[i] = alphabet.substr(index, 1);
+  }
+  return "__imports_" + digits.join("") + "__";
+};
+
 ///////////////////////////////////////////////////////////////////////////////
 // Module
 ///////////////////////////////////////////////////////////////////////////////
@@ -22,11 +34,11 @@ var Module = function (options) {
   // module name or null
   self.name = options.name || null;
 
-  // map from symbol to other module name
-  self.imports = options.imports || {};
-
   // files in the module. array of File
   self.files = [];
+
+  // boundary to use to mark where import should go in final phase
+  self.boundary = generateBoundary();
 
   // options
   self.forceExport = options.forceExport || [];
@@ -61,8 +73,15 @@ _.extend(Module.prototype, {
   },
 
   // Figure out which vars need to be specifically put in the module
-  // scope. This is the globalReferences of any file, minus any
-  // imports.
+  // scope.
+  //
+  // XXX We used to subtract 'import roots' out of this (defined as
+  // the first part of each imported symbol) but two-phase link
+  // complicates this. We should really go back to doing it, though,
+  // because otherwise the output looks ugly and it's harder to skim
+  // and see what your globals are. Probably this means we need to
+  // move the emission of the Package-scope Variables section (but not
+  // the actual static analysis) to the final phase.
   computeModuleScopedVars: function () {
     var self = this;
 
@@ -73,20 +92,7 @@ _.extend(Module.prototype, {
     });
     globalReferences = _.uniq(globalReferences);
 
-    // Find import roots, defined as the first part of each imported
-    // symbol
-    var importRoots = [];
-    _.each(self.imports, function (otherModule, symbol) {
-      var root = symbol.split('.')[0];
-      importRoots.push(root);
-    });
-
-    // XXX XXX we will likely want to do this in a totally different
-    // way once we have a way to get the full path of the global
-    // references (Foo.Bar rather than Foo) out of our source
-    // analysis?
-
-    return _.difference(globalReferences, importRoots);
+    return globalReferences;
   },
 
   // Output is a list of objects with keys 'source' and 'servePath'.
@@ -100,8 +106,8 @@ _.extend(Module.prototype, {
     // then our job is much simpler. And we can get away with
     // preserving the line numbers.
     if (self.useGlobalNamespace) {
-      var ret = _.isEmpty(self.imports) ? [] : [{
-        source: self.getImportCode("/* Imports for global scope */\n\n", true),
+      var ret = [{
+        source: self.boundary,
         servePath: self.importStubServePath
       }];
 
@@ -124,7 +130,7 @@ _.extend(Module.prototype, {
 
     // Prologue
     var combined = "(function () {\n\n";
-    combined += self.getImportCode("/* Imports */\n");
+    combined += self.boundary;
 
     if (moduleScopedVars.length) {
       combined += "/* Package-scope variables */\n";
@@ -191,28 +197,6 @@ _.extend(Module.prototype, {
     return buf;
   },
 
-  getImportCode: function (header, omitVar) {
-    var self = this;
-
-    if (_.isEmpty(self.imports))
-      return "";
-
-    var scratch = {};
-    _.each(self.imports, function (name, symbol) {
-      scratch[symbol] = packageDot(name) + "." + symbol;
-    });
-    var imports = buildSymbolTree(scratch);
-
-    var buf = header;
-    _.each(imports, function (node, key) {
-      buf += (omitVar ? "" : "var " ) +
-        key + " = " + writeSymbolTree(node) + ";\n";
-    });
-
-    // XXX need to remove newlines, whitespace, in line number preserving mode
-    buf += "\n";
-    return buf;
-  }
 });
 
 // Given 'symbolMap' like {Foo: 's1', 'Bar.Baz': 's2', 'Bar.Quux.A': 's3', 'Bar.Quux.B': 's4'}
@@ -470,15 +454,16 @@ _.extend(Unit.prototype, {
 // Top-level entry point
 ///////////////////////////////////////////////////////////////////////////////
 
+// This does the first phase of linking. It does not require knowledge
+// of your imports. It returns the module's exports, plus a set of
+// partially linked files which you must pass to link() along with
+// your import list to get your final linked files.
+//
 // options include:
 //
 // name: the name of this module (for stashing exports to be later
 // read by the imports of other modules); null if the module has no
 // name (in that case exports will not work properly)
-//
-// imports: symbols to import. map from symbol name (something like
-// 'Foo', "Foo.bar", etc) to the module from which it should be
-// imported (which must load before us at runtime)
 //
 // inputFiles: an array of objects representing input files.
 //  - source: the source code
@@ -502,10 +487,10 @@ _.extend(Unit.prototype, {
 // Output is an object with keys:
 // - files: is an array of output files in the same format as inputFiles
 // - exports: the exports, as a list of string ('Foo', 'Thing.Stuff', etc)
-var link = function (options) {
+// - boundary: an opaque value that must be passed along with 'files' to link()
+var prelink = function (options) {
   var module = new Module({
     name: options.name,
-    imports: options.imports,
     forceExport: options.forceExport,
     useGlobalNamespace: options.useGlobalNamespace,
     importStubServePath: options.importStubServePath,
@@ -521,8 +506,74 @@ var link = function (options) {
 
   return {
     files: files,
-    exports: exports
+    exports: exports,
+    boundary: module.boundary
   };
+};
+
+
+// Finish the linking.
+//
+// options include:
+//
+// imports: symbols to import. map from symbol name (something like
+// 'Foo', "Foo.bar", etc) to the module from which it should be
+// imported (which must load before us at runtime)
+//
+// useGlobalNamespace: must be the same value that was passed to link()
+//
+// prelinkFiles: the 'files' output from prelink()
+//
+// boundary: the 'boundary' output from prelink()
+//
+// Output is an array of final output files in the same format as the
+// 'inputFiles' argument to prelink().
+var link = function (options) {
+  var importCode = options.useGlobalNamespace ?
+    getImportCode(options.imports, "/* Imports for global scope */\n\n", true) :
+    getImportCode(options.imports, "/* Imports */\n");
+
+  var ret = [];
+  _.each(options.prelinkFiles, function (file) {
+    var source = file.source;
+    var parts = source.split(options.boundary);
+    if (parts.length > 2)
+      throw new Error("Boundary appears more than once?");
+    if (parts.length === 2) {
+      source = parts[0] + importCode + parts[1];
+      if (source.length === 0)
+        return; // empty global-imports file -- elide
+    }
+    ret.push({
+      source: source,
+      servePath: file.servePath
+    });
+  });
+
+  return ret;
+};
+
+var getImportCode = function (imports, header, omitvar) {
+  var self = this;
+
+  if (_.isEmpty(imports))
+    return "";
+
+  var scratch = {};
+  _.each(imports, function (name, symbol) {
+    scratch[symbol] = packageDot(name) + "." + symbol;
+  });
+  var imports = buildSymbolTree(scratch);
+
+  var buf = header;
+  _.each(imports, function (node, key) {
+    buf += (omitvar ? "" : "var " ) +
+      key + " = " + writeSymbolTree(node) + ";\n";
+  });
+
+  // XXX need to remove newlines, whitespace, in line number preserving mode
+  buf += "\n";
+  return buf;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -766,5 +817,6 @@ _.each(blacklistedSymbols, function (name) {
 });
 
 var linker = module.exports = {
+  prelink: prelink,
   link: link
 };

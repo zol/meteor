@@ -408,37 +408,44 @@ _.extend(Bundle.prototype, {
       });
       slice.resources = others;
 
-      // Run the link
+      // Phase 1 link
       var servePathForRole = {
         use: "/packages/",
         test: "/package-tests/"
       };
 
-      var results = linker.link({
+      var results = linker.prelink({
         inputFiles: inputs,
         useGlobalNamespace: isApp,
         combinedServePath: isApp ? null :
           servePathForRole[slice.role] + slice.pkg.name + ".js",
         // XXX report an error if there is a package called global-imports
         importStubServePath: '/packages/global-imports.js',
-        imports: imports,
         name: slice.pkg.name || null,
         forceExport: slice.pkg.exports[slice.role][slice.where]
       });
 
-      // Save exports for use by future imports
-      // XXX saving on the Package object is a temporary hack ... In
-      // the future this export computation should be stored on the
-      // Package object to start with rather than be computed at
-      // link time.
+      // Save exports for use by future imports XXX saving on the
+      // Package object is a temporary hack ... In the future this
+      // export computation should be stored on the Package object to
+      // start with rather than be computed at link time (actually, we
+      // should store the entire prelink output.)
       slice.pkg.exports[slice.role][slice.where] = results.exports;
 
+      // Phase 2 link
+      var outputFiles = linker.link({
+        imports: imports,
+        useGlobalNamespace: isApp,
+        prelinkFiles: results.files,
+        boundary: results.boundary
+      });
+
       // Add each output as a resource
-      _.each(results.files, function (outputFile) {
+      _.each(outputFiles, function (outputFile) {
         slice.resources.push({
           type: "js",
           data: new Buffer(outputFile.source, 'utf8'),
-          servePath: outputFile.servePath,
+          servePath: outputFile.servePath
         });
       });
     });
