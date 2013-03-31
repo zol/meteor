@@ -199,6 +199,29 @@ _.extend(Package.prototype, {
     _.each(["use", "test"], function (role) {
       if (self.roleHandlers[role]) {
         self.roleHandlers[role]({
+          // Called when this package wants to make another package be
+          // used. Can also take literal package objects, if you have
+          // anonymous packages you want to use (eg, app packages)
+          //
+          // options can include:
+          //
+          // - role: defaults to "use", but you could pass something
+          //   like "test" if for some reason you wanted to include a
+          //   package's tests
+          //
+          // - unordered: if true, don't require this package to load
+          //   before us -- just require it to be loaded anytime. Also
+          //   don't bring this package's imports into our
+          //   namespace. If false, override a true value specified in
+          //   a previous call to use for this package name. (A
+          //   limitation of the current implementation is that this
+          //   flag is not tracked per-environment or per-role.)  This
+          //   option can be used to resolve circular dependencies in
+          //   exceptional circumstances, eg, the 'meteor' package
+          //   depends on 'handlebars', but all packages (including
+          //   'handlebars') have an implicit dependency on
+          //   'meteor'. Internal use only -- future support of this
+          //   is not guaranteed. #UnorderedPackageReferences
           use: function (names, where, options) {
             options = options || {};
 
@@ -218,6 +241,10 @@ _.extend(Package.prototype, {
               });
             });
           },
+
+          // Top-level call to add a source file to a package. It will
+          // be processed according to its extension (eg, *.coffee
+          // files will be compiled to JavaScript.)
           add_files: function (paths, where) {
             if (!(paths instanceof Array))
               paths = paths ? [paths] : [];
@@ -231,6 +258,14 @@ _.extend(Package.prototype, {
               });
             });
           },
+
+          // Force the export of a symbol from this package. An
+          // alternative to using @export directives. Possibly helpful
+          // when you don't want to modify the source code of a third
+          // party library.
+          //
+          // @param symbols String (eg "Foo", "Foo.bar") or array of String
+          // @param where 'client', 'server', or an array of those
           exportSymbol: function (symbols, where) {
             if (!(symbols instanceof Array))
               symbols = symbols ? [symbols] : [];
@@ -520,7 +555,7 @@ var packages = module.exports = {
   // - APP_DIR/packages (if options.appDir passed)
   // - PACKAGE_DIRS
   // - METEOR_DIR/packages (if in a git checkout)
-  // - warehouse
+  // - warehouse (if options.releaseManifest passed)
   get: function (name, options) {
     var self = this;
     options = options || {};

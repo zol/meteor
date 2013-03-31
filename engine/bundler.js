@@ -88,12 +88,6 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
   // XXX this is a mess, refactor
   self.where = {};
 
-  // other packages we've used (with any 'where') -- map from role to
-  // id to PackageBundlingInfo. self.unordered[id] will be true if we
-  // have used the package but not imposed an ordering constraint.
-  self.using = {use: {}, test: {}};
-  self.unordered = {};
-
   // Tracks which source files have already been added, so we don't
   // add them again. Map from where ("client", "server") to a source
   // file name (relative to the package) to true
@@ -126,28 +120,6 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
 
   // the API available from on_use / on_test handlers
   self.api = {
-    // Called when this package wants to make another package be
-    // used. Can also take literal package objects, if you have
-    // anonymous packages you want to use (eg, app packages)
-    //
-    // options can include:
-    //
-    // - role: defaults to "use", but you could pass something like
-    //   "test" if for some reason you wanted to include a package's
-    //   tests
-    //
-    // - unordered: if true, don't require this package to load before
-    //   us -- just require it to be loaded anytime. Also don't bring
-    //   this package's imports into our namespace. If false, override
-    //   a true value specified in a previous call to use for this
-    //   package name. (A limitation of the current implementation is
-    //   that this flag is not tracked per-environment or per-role.)
-    //   This option can be used to resolve circular dependencies in
-    //   exceptional circumstances, eg, the 'meteor' package depends
-    //   on 'handlebars', but all packages (including 'handlebars')
-    //   have an implicit dependency on 'meteor'. Internal use only --
-    //   future support of this is not
-    //   guaranteed. #UnorderedPackageReferences
     use: function (names, where, options) {
       options = _.clone(options || {});
 
@@ -155,14 +127,10 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
         names = names ? [names] : [];
 
       _.each(names, function (name) {
-        options.from = self;
         self.bundle.use(name, where, options);
       });
     },
 
-    // Top-level call to add a source file to a package. It will be
-    // processed according to its extension (eg, *.coffee files will
-    // be compiled to JavaScript.)
     add_files: function (paths, where) {
       if (!(paths instanceof Array))
         paths = paths ? [paths] : [];
@@ -176,12 +144,6 @@ var PackageBundlingInfo = function (pkg, bundle, role) {
       });
     },
 
-    // Force the export of a symbol from this package. An alternative
-    // to using @export directives. Possibly helpful when you don't
-    // want to modify the source code of a third party library.
-    //
-    // @param symbols String (eg "Foo", "Foo.bar") or array of String
-    // @param where 'client', 'server', or an array of those
     exportSymbol: function (symbols, where) {
       // XXX remove
     },
@@ -408,11 +370,13 @@ _.extend(Bundle.prototype, {
           if (done[id(pbi)])
             return;
 
-          _.each(_.values(pbi.using), function (idToPbiMap) { // roles
-            _.each(_.values(idToPbiMap), function (usedPbi) {
-              if (pbi.unordered[usedPbi.pkg.id])
+          _.each(_.values(pbi.pkg.uses[pbi.role]), function (pkgNames, w) {
+            _.each(pkgNames, function (usedPkgName) {
+              if (pbi.pkg.name && pbi.pkg.unordered[usedPkgName])
                 return;
-
+              var usedPkg = self.getPackage(usedPkgName);
+              var usedPbi = self._get_bundling_info_for_package(usedPkg,
+                                                                "use");
               if (onStack[id(usedPbi)]) {
                 console.error("fatal: circular dependency between packages " +
                               pbi.pkg.name + " and " + usedPbi.pkg.name);
@@ -441,25 +405,8 @@ _.extend(Bundle.prototype, {
     self.pbisByLoadOrder = loadOrderPbis(pbis);
   },
 
-  // Call to add a package to this bundle. The first argument may be
-  // either a package or a package name. If 'where' is given, it's an
-  // array of "client" and/or "server".
-  //
-  // options can include:
-  // - from: if given, it's the PackageBundlingInfo that's doing the
-  //   using, or omit to indicate top level
-  // - role: "use", the default, to use the package normally; or
-  //   another role, eg "test", to use a different slice of a package
-  // - unordered: if true, don't constrain pkg to load before
-  //   options.from. The latest specified value for unordered
-  //   wins. See #UnorderedPackageReferences
-  use: function (packageOrPackageName, where, options) {
+  getPackage: function (packageOrPackageName) {
     var self = this;
-    options = options || {};
-    var role = options.role || "use";
-
-    // Find the package
-    // 'packages.get' is identity if 'packageOrPackageName' is a Package object.
     var pkg = packages.get(packageOrPackageName, {
       releaseManifest: self.releaseManifest,
       appDir: self.appDir
@@ -468,19 +415,28 @@ _.extend(Bundle.prototype, {
       console.error("Package not found: " + packageOrPackageName);
       process.exit(1);
     }
+    return pkg;
+  },
+
+  // Call to add a package to this bundle. The first argument may be
+  // either a package or a package name. If 'where' is given, it's an
+  // array of "client" and/or "server".
+  //
+  // options can include:
+  // - role: "use", the default, to use the package normally; or
+  //   another role, eg "test", to use a different slice of a package
+  use: function (packageOrPackageName, where, options) {
+    var self = this;
+    options = options || {};
+    var role = options.role || "use";
+
+    // Find the package, or exit
+    // Is identify if 'packageOrPackageName
+    var pkg = self.getPackage(packageOrPackageName);
 
     // Find the bundling state for this package and role, creating if
     // necessary
     var inst = self._get_bundling_info_for_package(pkg, role);
-
-    // If we're being used by a particular package P, record that P
-    // uses us. This is used for such things as determining which
-    // extension handlers are visible and for load ordering.
-    if (options.from) {
-      options.from.using[role][pkg.id] = inst;
-      if ('unordered' in options)
-        options.from.unordered[pkg.id] = !! options.unordered;
-    }
 
     // If this package has been used before anywhere else in this
     // bundle, with the exact same environment, then we can stop -- we
@@ -549,7 +505,7 @@ _.extend(Bundle.prototype, {
         // symbols, later packages get precedence.
         var imports = {}; // map from symbol to supplying package name
         _.each(_.values(pbi.pkg.uses[pbi.role][where]), function (otherPkgName){
-          var otherPkg = packages.get(otherPkgName);
+          var otherPkg = self.getPackage(otherPkgName);
           if (otherPkg.name && ! pbi.pkg.unordered[otherPkg.name]) {
             _.each(otherPkg.exports.use[where], function (symbol) {
               imports[symbol] = otherPkg.name;
