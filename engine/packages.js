@@ -566,25 +566,6 @@ var packages = module.exports = {
         pkg.initFromWarehouse(name, options.releaseManifest.packages[name]);
         loadedPackages[name] = pkg;
       }
-
-      // XXX HACK: Ensure that all of our dependencies have been *read
-      // from disk into Package objects* before we try to to call any
-      // handlers. We need this because of the gross way that
-      // templating works. 'handlebars' calls
-      // Package._require("parse.js") at package.js load time which
-      // splats the Handlebars symbol into the global namespace which
-      // 'templating's extension handlers then depend on. One day (one
-      // day soon I hope) we will model extensions as application code
-      // rather than package.js code, and then we will be able to
-      // represent its dependencies properly.
-      _.each(["use", "test"], function (role) {
-        _.each(["client", "server"], function (where) {
-          _.each(pkg.uses[role][where], function (pkgName) {
-            // force dependents to parse their package.js's
-            self.get(pkgName, options);
-          });
-        });
-      });
     }
 
     return loadedPackages[name];

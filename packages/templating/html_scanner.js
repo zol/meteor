@@ -132,7 +132,7 @@ html_scanner = {
     }
 
     // <body> or <template>
-    var code = 'Package.handlebars.Handlebars.json_ast_to_func(' +
+    var code = 'Package.templating.Handlebars.json_ast_to_func(' +
           JSON.stringify(Handlebars.to_json_ast(contents)) + ')';
 
     if (tag === "template") {
