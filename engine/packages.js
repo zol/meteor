@@ -414,21 +414,6 @@ _.extend(Package.prototype, {
       sources_except("test", "client", "server", true);
     self.sources.test.server =
       sources_except("test", "server", "client", true);
-
-    // Old style
-    // XXX remove
-    self.packageFacade.on_use(function (api) {
-      api.use(packages);
-      api.add_files(self.sources.use.client, "client");
-      api.add_files(self.sources.use.server, "server");
-    });
-
-    self.packageFacade.on_test(function (api) {
-      api.use(packages);
-      api.use(self);
-      api.add_files(self.sources.test.client, "client");
-      api.add_files(self.sources.test.server, "server");
-    });
   },
 
   // Find all files under this.source_root that have an extension we
