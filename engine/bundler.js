@@ -166,6 +166,20 @@ _.extend(Bundle.prototype, {
     var self = this;
     var slice = new Slice(pkg, role, where);
 
+    // XXX HACK: Ensure that all of our dependencies have been *read
+    // from disk into Package objects* before we try to to call any
+    // handlers. We need this because of the gross way that templating
+    // works. 'handlebars' calls Package._require("parse.js") at
+    // package.js load time which splats the Handlebars symbol into
+    // the global namespace which 'templating's extension handlers
+    // then depend on. One day (one day soon I hope) we will model
+    // extensions as application code rather than package.js code, and
+    // then we will be able to represent its dependencies properly.
+    _.each(pkg.uses[role][where], function (pkgName) {
+      // force dependents to parse their package.js's
+      self.getPackage(pkgName);
+    });
+
     /**
      * This is the ultimate low-level API to add data to the bundle.
      *
@@ -852,7 +866,8 @@ exports.bundle = function (app_dir, output_path, options) {
     });
 
     // Create a Package object that represents the app
-    var app = packages.get_for_app(app_dir, ignore_files);
+    var app = packages.get_for_app(app_dir, ignore_files,
+                                   bundle.packageSearchOptions);
 
     // Populate the list of slices to load
     bundle.determineLoadOrder({

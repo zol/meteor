@@ -15,7 +15,7 @@ var fs = require('fs');
 //
 // To create a package object from an app directory:
 //   var pkg = new Package;
-//   pkg.initFromAppDir(app_dir);
+//   pkg.initFromAppDir(app_dir, ignore_files, packageSearchOptions);
 
 var next_package_id = 1;
 var Package = function () {
@@ -362,14 +362,15 @@ _.extend(Package.prototype, {
       path.join(warehouse.getWarehouseDir(), 'packages', name, version));
   },
 
-  initFromAppDir: function (app_dir, ignore_files) {
+  initFromAppDir: function (app_dir, ignore_files, packageSearchOptions) {
     var self = this;
     self.name = null;
     self.source_root = app_dir;
     self.serve_root = path.sep;
 
     var sources_except = function (role, where, except, tests) {
-      var allSources = self._scan_for_sources(role, where, ignore_files || []);
+      var allSources = self._scan_for_sources(role, where, ignore_files || [],
+                                              packageSearchOptions);
       var withoutAppPackages = _.reject(allSources, function (sourcePath) {
         // Skip files that are in app packages. (Directories named "packages"
         // lower in the tree are OK.)
@@ -438,13 +439,15 @@ _.extend(Package.prototype, {
   //
   // role should be 'use' or 'test'
   // where should be 'client' or 'server'
-  _scan_for_sources: function (role, where, ignore_files) {
+  _scan_for_sources: function (role, where, ignore_files,
+                               packageSearchOptions) {
     var self = this;
 
     // find everything in tree, sorted depth-first alphabetically.
     var file_list =
       files.file_list_sync(self.source_root,
-                           self.registeredExtensions(role, where));
+                           self.registeredExtensions(role, where,
+                                                     packageSearchOptions));
     file_list = _.reject(file_list, function (file) {
       return _.any(ignore_files || [], function (pattern) {
         return file.match(pattern);
@@ -578,6 +581,25 @@ var packages = module.exports = {
         pkg.initFromWarehouse(name, options.releaseManifest.packages[name]);
         loadedPackages[name] = pkg;
       }
+
+      // XXX HACK: Ensure that all of our dependencies have been *read
+      // from disk into Package objects* before we try to to call any
+      // handlers. We need this because of the gross way that
+      // templating works. 'handlebars' calls
+      // Package._require("parse.js") at package.js load time which
+      // splats the Handlebars symbol into the global namespace which
+      // 'templating's extension handlers then depend on. One day (one
+      // day soon I hope) we will model extensions as application code
+      // rather than package.js code, and then we will be able to
+      // represent its dependencies properly.
+      _.each(["use", "test"], function (role) {
+        _.each(["client", "server"], function (where) {
+          _.each(pkg.uses[role][where], function (pkgName) {
+            // force dependents to parse their package.js's
+            self.get(pkgName, options);
+          });
+        });
+      });
     }
 
     return loadedPackages[name];
@@ -593,9 +615,9 @@ var packages = module.exports = {
   // get a package that represents an app. (ignore_files is optional
   // and if given, it should be an array of regexps for filenames to
   // ignore when scanning for source files.)
-  get_for_app: function (app_dir, ignore_files) {
+  get_for_app: function (app_dir, ignore_files, packageSearchOptions) {
     var pkg = new Package;
-    pkg.initFromAppDir(app_dir, ignore_files || []);
+    pkg.initFromAppDir(app_dir, ignore_files || [], packageSearchOptions);
     return pkg;
   },
 
