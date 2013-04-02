@@ -73,30 +73,6 @@ var Slice = function (pkg, role, where) {
 
   // "client" or "server"
   self.where = where;
-
-  // All of the data provided by this package for eventual inclusion
-  // in the bundle. A list of objects with these keys:
-  //
-  // type: "js", "css", "head", "body", "static"
-  //
-  // data: The contents of this resource, as a Buffer. For example,
-  // for "head", the data to insert in <head>; for "js", the
-  // JavaScript source code (which may be subject to further
-  // processing such as minification); for "static", the contents of a
-  // static resource such as an image.
-  //
-  // servePath: The (absolute) path at which the resource would prefer
-  // to be served. Interpretation varies by type. For example, always
-  // honored for "static", ignored for "head" and "body", sometimes
-  // honored for CSS but ignored if we are concatenating.
-  self.resources = [];
-
-  // Prelink output. 'boundary' is a magic cookie used for inserting
-  // imports. 'prelinkFiles' is the partially linked JavaScript
-  // code. Both of these are inputs into the final link phase, which
-  // inserts the final JavaScript resources into 'resources'.
-  self.boundary = null;
-  self.prelinkFiles = null;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -167,137 +143,6 @@ _.extend(Bundle.prototype, {
     return hash.digest('hex');
   },
 
-  _prepSlice: function (pkg, role, where) {
-    var self = this;
-    var slice = new Slice(pkg, role, where);
-
-    // XXX HACK: Ensure that all of our dependencies have been *read
-    // from disk into Package objects* before we try to to call any
-    // handlers. We need this because of the gross way that templating
-    // works. 'handlebars' calls Package._require("parse.js") at
-    // package.js load time which splats the Handlebars symbol into
-    // the global namespace which 'templating's extension handlers
-    // then depend on. One day (one day soon I hope) we will model
-    // extensions as application code rather than package.js code, and
-    // then we will be able to represent its dependencies properly.
-    _.each(pkg.uses[role][where], function (pkgName) {
-      // force dependents to parse their package.js's
-      self.getPackage(pkgName);
-    });
-
-    /**
-     * This is the ultimate low-level API to add data to the bundle.
-     *
-     * type: "js", "css", "head", "body", "static"
-     *
-     * path: the (absolute) path at which the file will be
-     * served. ignored in the case of "head" and "body".
-     *
-     * source_file: the absolute path to read the data from. if path
-     * is set, will default based on that. overridden by data.
-     *
-     * data: the data to send. overrides source_file if present. you
-     * must still set path (except for "head" and "body".)
-     */
-    var add_resource = function (options) {
-      var source_file = options.source_file || options.path;
-
-      var data;
-      if (options.data) {
-        data = options.data;
-        if (!(data instanceof Buffer)) {
-          if (!(typeof data === "string"))
-            throw new Error("Bad type for data");
-          data = new Buffer(data, 'utf8');
-        }
-      } else {
-        if (!source_file)
-          throw new Error("Need either source_file or data");
-        data = fs.readFileSync(source_file);
-      }
-
-      if (options.where && options.where !== slice.where)
-        throw new Error("'where' is deprecated here and if provided " +
-                        "must be '" + slice.where + "'");
-
-      slice.resources.push({
-        type: options.type,
-        data: data,
-        servePath: options.path
-      });
-    };
-
-    var sources = slice.pkg.sources[slice.role][slice.where];
-    _.each(sources, function (relPath) {
-
-      var ext = path.extname(relPath).substr(1);
-      var handler = slice.pkg.getSourceHandler(slice.role, slice.where, ext,
-                                               self.packageSearchOptions);
-      if (! handler) {
-        // If we don't have an extension handler, serve this file
-        // as a static resource.
-        slice.resources.push({
-          type: "static",
-          data: fs.readFileSync(path.join(slice.pkg.source_root, relPath)),
-          servePath: path.join(slice.pkg.serve_root, relPath)
-        });
-        return;
-      }
-
-      handler({add_resource: add_resource},
-              path.join(slice.pkg.source_root, relPath),
-              path.join(slice.pkg.serve_root, relPath),
-              slice.where);
-    });
-
-    //////////////////// link ////////////////////
-
-    var isApp = ! slice.pkg.name;
-
-    // Pull out the JavaScript files
-    var inputs = [];
-    var others = [];
-    _.each(slice.resources, function (resource) {
-      if (resource.type === "js") {
-        inputs.push({
-          source: resource.data.toString('utf8'),
-          servePath: resource.servePath
-        });
-      } else {
-        others.push(resource);
-      }
-    });
-    slice.resources = others;
-
-    // Phase 1 link
-    var servePathForRole = {
-      use: "/packages/",
-      test: "/package-tests/"
-    };
-
-    var results = linker.prelink({
-      inputFiles: inputs,
-      useGlobalNamespace: isApp,
-      combinedServePath: isApp ? null :
-        servePathForRole[slice.role] + slice.pkg.name + ".js",
-      // XXX report an error if there is a package called global-imports
-      importStubServePath: '/packages/global-imports.js',
-      name: slice.pkg.name || null,
-      forceExport: slice.pkg.exports[slice.role][slice.where]
-    });
-    slice.prelinkFiles = results.files;
-    slice.boundary = results.boundary;
-
-    // Save exports for use by future imports XXX saving on the
-    // Package object is a temporary hack ... In the future this
-    // export computation should be stored on the Package object to
-    // start with rather than be computed at link time (actually, we
-    // should store the entire prelink output.)
-    slice.pkg.exports[slice.role][slice.where] = results.exports;
-
-    return slice;
-  },
-
   // Determine the packages to load, create Slices for
   // them, put them in load order, save in slices.
   //
@@ -317,7 +162,7 @@ _.extend(Bundle.prototype, {
     var add = function (pkg, role, where) {
       if (sliceIndex[role][where][pkg.id])
         return;
-      var slice = self._prepSlice(pkg, role, where);
+      var slice = new Slice(pkg, role, where);
       sliceIndex[role][where][pkg.id] = slice;
       slicesUnordered.push(slice);
       _.each(pkg.uses[role][where], function (usedPkgName) {
@@ -424,15 +269,21 @@ _.extend(Bundle.prototype, {
     this.nodeModulesDirs[relNodeModulesPath] = nodeModulesPath;
   },
 
-  // Runs the second half of the JavaScript linking begun when the
-  // slice was loaded. Transforms 'prelinkFiles' on each slice into
-  // actual "js" resources in slice.resources.
-  link: function () {
+  // Sort the packages in dependency order, then, package by package,
+  // write their resources into the bundle (which includes running the
+  // JavaScript linker.)
+  emitResources: function () {
     var self = this;
 
+    // Copy their resources into the bundle in order
     _.each(self.slices, function (slice) {
-      var isApp = ! slice.pkg.name;
+      // ** Get the final resource list. It's the static resources
+      // ** from the package plus the output of running the JavaScript
+      // ** linker.
 
+      var resources = _.clone(slice.pkg[slice.role][slice.where].resources);
+
+      var isApp = ! slice.pkg.name;
       // Compute imports by merging the exports of all of the
       // packages we use. To be eligible to supply an import, a
       // slice must presently (a) be named (the app can't supply
@@ -455,30 +306,20 @@ _.extend(Bundle.prototype, {
       var files = linker.link({
         imports: imports,
         useGlobalNamespace: isApp,
-        prelinkFiles: slice.prelinkFiles,
-        boundary: slice.boundary
+        prelinkFiles: slice.pkg[slice.role][slice.where].prelinkFiles,
+        boundary: slice.pkg[slice.role][slice.where].boundary
       });
-
-      slice.boundary = slice.prelinkFiles = null;
 
       // Add each output as a resource
       _.each(files, function (file) {
-        slice.resources.push({
+        resources.push({
           type: "js",
           data: new Buffer(file.source, 'utf8'),
           servePath: file.servePath
         });
       });
-    });
-  },
 
-  // Sort the packages in dependency order, then, package by package,
-  // write their resources into the bundle.
-  addPackageResourcesToBundle: function () {
-    var self = this;
-
-    // Copy their resources into the bundle in order
-    _.each(self.slices, function (slice) {
+      // ** Emit the resources
       _.each(slice.resources, function (resource) {
         if (resource.type === "js") {
           self.files[slice.where][resource.servePath] = resource.data;
@@ -797,8 +638,7 @@ _.extend(Bundle.prototype, {
       if (slice.pkg.name) {
         dependencies_json.packages[slice.pkg.name] = _.union(
           dependencies_json.packages[slice.pkg.name] || [],
-          slice.pkg.extraDependencies,
-          slice.pkg.sources[slice.role][slice.where]
+          slice.pkg.dependencies
         );
       }
     });
@@ -886,11 +726,9 @@ exports.bundle = function (app_dir, output_path, options) {
     // Process npm modules
     bundle.prepNodeModules();
 
-    // Process JavaScript through the linker
-    bundle.link();
-
-    // Put resources in load order and copy them to the bundle
-    bundle.addPackageResourcesToBundle();
+    // Link JavaScript, put resources in load order, and copy them to
+    // the bundle
+    bundle.emitResources();
 
     // Minify, if requested
     if (!options.noMinify)

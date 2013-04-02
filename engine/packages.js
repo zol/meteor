@@ -53,25 +53,45 @@ var Package = function () {
   // package name to true.
   self.unordered = {};
 
-  // source files used. map from role to where to array of string path.
-  self.sources = {use: {client: [], server: []},
-                  test: {client: [], server: []}};
-
-  // Other files that we want to monitor for changes in development
-  // mode, such as package.js. Array of relative paths.
-  self.extraDependencies = [];
+  // Files that we want to monitor for changes in development mode,
+  // such as source files and package.js. Array of relative paths.
+  self.dependencies = [];
 
   // All symbols exported from the JavaScript code in this
   // package. Map from role to where to array of string symbol (eg
   // "Foo", "Bar.baz".)
-  //
-  // XXX for now, when the package is loaded, this is just the
-  // explicitly exported symbols from package.js, not @export
-  // comments. The bundler's link pass then rewrites this to the
-  // complete symbol list. This is a hack -- it should have the
-  // complete list to start with.
   self.exports = {use: {client: [], server: []},
                   test: {client: [], server: []}};
+
+  // Prelink output. 'boundary' is a magic cookie used for inserting
+  // imports. 'prelinkFiles' is the partially linked JavaScript
+  // code. Both of these are inputs into the final link phase, which
+  // inserts the final JavaScript resources into 'resources'. All of
+  // them are maps from role to where to the actual value.
+  self.boundary = {use: {client: null, server: null},
+                   test: {client: null, server: null}};
+  self.prelinkFiles = {use: {client: null, server: null},
+                       test: {client: null, server: null}};
+
+  // All of the data provided by this package for eventual inclusion
+  // in the bundle, other than JavaScript that still needs to be fed
+  // through the final link stage.. A map from where to role to a list
+  // of objects with these keys:
+  //
+  // type: "js", "css", "head", "body", "static"
+  //
+  // data: The contents of this resource, as a Buffer. For example,
+  // for "head", the data to insert in <head>; for "js", the
+  // JavaScript source code (which may be subject to further
+  // processing such as minification); for "static", the contents of a
+  // static resource such as an image.
+  //
+  // servePath: The (absolute) path at which the resource would prefer
+  // to be served. Interpretation varies by type. For example, always
+  // honored for "static", ignored for "head" and "body", sometimes
+  // honored for CSS but ignored if we are concatenating.
+  self.resources = {use: {client: null, server: null},
+                    test: {client: null, server: null}};
 
   // functions that can be called when the package is scanned --
   // visible as `Package` when package.js is executed
@@ -186,7 +206,15 @@ _.extend(Package.prototype, {
     var func = require('vm').runInThisContext(wrapped, fullpath, true);
     func(self.packageFacade, self.npmFacade);
 
-    self.extraDependencies.push('package.js');
+    self.dependencies.push('package.js');
+
+    // source files used
+    var sources = {use: {client: [], server: []},
+                   test: {client: [], server: []}};
+
+    // symbols force-exported
+    var forceExport = {use: {client: [], server: []},
+                       test: {client: [], server: []}};
 
     // For this old-style, on_use/on_test/where-based package, figure
     // out its dependencies by calling its on_xxx functions and seeing
@@ -261,7 +289,7 @@ _.extend(Package.prototype, {
 
             _.each(paths, function (path) {
               _.each(where, function (w) {
-                self.sources[role][w].push(path);
+                sources[role][w].push(path);
               });
             });
           },
@@ -282,7 +310,7 @@ _.extend(Package.prototype, {
 
             _.each(symbols, function (symbol) {
               _.each(where, function (w) {
-                self.exports[role][w].push(symbol);
+                forceExport[role][w].push(symbol);
               });
             });
           },
@@ -306,6 +334,7 @@ _.extend(Package.prototype, {
     });
 
     self._uniquifyPackages();
+    self._compile(sources, forceExport);
   },
 
   // If a package appears twice in a 'self.uses' list, keep only the
@@ -408,12 +437,130 @@ _.extend(Package.prototype, {
     });
     self._uniquifyPackages();
 
-    self.sources.use.client = sources_except("use", "client", "server");
-    self.sources.use.server = sources_except("use", "server", "client");
-    self.sources.test.client =
-      sources_except("test", "client", "server", true);
-    self.sources.test.server =
-      sources_except("test", "server", "client", true);
+    var sources = {
+      use: {
+        client: sources_except("use", "client", "server"),
+        server: sources_except("use", "server", "client")
+      }, test: {
+        client: sources_except("test", "client", "server", true),
+        server: sources_except("test", "server", "client", true)
+      }
+    };
+
+    self._compile(sources, {use: {client: [], server: []},
+                            test: {client: [], server: []}});
+  },
+
+  // sources is a map from role to where to an array of source
+  // files. Process all source files through the appropriate handlers
+  // and run the prelink phase on any resulting JavaScript. Also add
+  // all provided source files to the package
+  // dependencies. forceExport is a the symbols that the package wants
+  // to export even if they are not declared in @export in the source,
+  // and is in the same format as self.exports.
+  _compile: function (sources, forceExport) {
+    var self = this;
+    var allSources = {};
+    var isApp = ! self.name;
+
+    _.each(["use", "test"], function (role) {
+      _.each(["client", "server"], function (where) {
+        var resources = [];
+        var js = [];
+
+        /**
+         * In the legacy extension API, this is the ultimate low-level
+         * entry point to add data to the bundle.
+         *
+         * type: "js", "css", "head", "body", "static"
+         *
+         * path: the (absolute) path at which the file will be
+         * served. ignored in the case of "head" and "body".
+         *
+         * source_file: the absolute path to read the data from. if
+         * path is set, will default based on that. overridden by
+         * data.
+         *
+         * data: the data to send. overrides source_file if
+         * present. you must still set path (except for "head" and
+         * "body".)
+         */
+        var add_resource = function (options) {
+          var source_file = options.source_file || options.path;
+
+          var data;
+          if (options.data) {
+            data = options.data;
+            if (!(data instanceof Buffer)) {
+              if (!(typeof data === "string"))
+                throw new Error("Bad type for data");
+              data = new Buffer(data, 'utf8');
+            }
+          } else {
+            if (!source_file)
+              throw new Error("Need either source_file or data");
+            data = fs.readFileSync(source_file);
+          }
+
+          if (options.where && options.where !== slice.where)
+            throw new Error("'where' is deprecated here and if provided " +
+                            "must be '" + slice.where + "'");
+
+          (type === "js" ? js : resources).push({
+            type: options.type,
+            data: data,
+            servePath: options.path
+          });
+        };
+
+        _.each(sources[slice.role][slice.where], function (relPath) {
+          allSources[source] = true;
+
+          var ext = path.extname(relPath).substr(1);
+          // XXX XXX XXX MUST PASS packageSearchOptions
+          var handler = self._getSourceHandler(slice.role, slice.where, ext,
+                                               /*self.packageSearchOptions*/);
+          if (! handler) {
+            // If we don't have an extension handler, serve this file
+            // as a static resource.
+            resources.push({
+              type: "static",
+              data: fs.readFileSync(path.join(slice.pkg.source_root, relPath)),
+              servePath: path.join(slice.pkg.serve_root, relPath)
+            });
+            return;
+          }
+
+          handler({add_resource: add_resource},
+                  path.join(slice.pkg.source_root, relPath),
+                  path.join(slice.pkg.serve_root, relPath),
+                  slice.where);
+        });
+
+        // Phase 1 link
+        var servePathForRole = {
+          use: "/packages/",
+          test: "/package-tests/"
+        };
+
+        var results = linker.prelink({
+          inputFiles: inputs,
+          useGlobalNamespace: isApp,
+          combinedServePath: isApp ? null :
+            servePathForRole[role] + self.name + ".js",
+          // XXX report an error if there is a package called global-imports
+          importStubServePath: '/packages/global-imports.js',
+          name: self.name || null,
+          forceExport: forceExport[role][where]
+        });
+
+        self.prelinkFiles[role][where] = results.files;
+        self.boundary[role][where] = results.boundary;
+        self.exports[role][where] = results.exports
+      });
+    });
+
+    self.dependencies = _.union(self.dependencies, _.keys(allSources));
   },
 
   // Find all files under this.source_root that have an extension we
@@ -510,7 +657,7 @@ _.extend(Package.prototype, {
   // found in this package. We'll use handlers that are defined in
   // this package and in its immediate dependencies. ('extension'
   // should be the extension of the file without a leading dot.)
-  getSourceHandler: function (role, where, extension, packageSearchOptions) {
+  _getSourceHandler: function (role, where, extension, packageSearchOptions) {
     var self = this;
     var candidates = [];
 
