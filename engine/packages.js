@@ -55,12 +55,13 @@ var Package = function () {
   self.unordered = {};
 
   // Files that we want to monitor for changes in development mode,
-  // such as source files and package.js. Array of relative paths.
+  // such as source files and package.js. Array of relative paths. Set
+  // only after ensureCompiled().
   self.dependencies = [];
 
   // All symbols exported from the JavaScript code in this
   // package. Map from role to where to array of string symbol (eg
-  // "Foo", "Bar.baz".)
+  // "Foo", "Bar.baz".) Set only after ensureCompiled().
   self.exports = {use: {client: [], server: []},
                   test: {client: [], server: []}};
 
@@ -68,7 +69,8 @@ var Package = function () {
   // imports. 'prelinkFiles' is the partially linked JavaScript
   // code. Both of these are inputs into the final link phase, which
   // inserts the final JavaScript resources into 'resources'. All of
-  // them are maps from role to where to the actual value.
+  // them are maps from role to where to the actual value. Set only
+  // after ensureCompiled().
   self.boundary = {use: {client: null, server: null},
                    test: {client: null, server: null}};
   self.prelinkFiles = {use: {client: null, server: null},
@@ -90,9 +92,18 @@ var Package = function () {
   // servePath: The (absolute) path at which the resource would prefer
   // to be served. Interpretation varies by type. For example, always
   // honored for "static", ignored for "head" and "body", sometimes
-  // honored for CSS but ignored if we are concatenating.
+  // honored for CSS but ignored if we are concatenating. Set only
+  // after ensureCompiled().
   self.resources = {use: {client: null, server: null},
                     test: {client: null, server: null}};
+
+  // Has this package been compiled?
+  self.isCompiled = false;
+
+  // Metadata that is read from package.js and is then input to the
+  // compiler.
+  self.sources = null;
+  self.forceExports = null;
 
   // functions that can be called when the package is scanned --
   // visible as `Package` when package.js is executed
@@ -335,7 +346,8 @@ _.extend(Package.prototype, {
     });
 
     self._uniquifyPackages();
-    self._compile(sources, forceExport);
+    self.sources = sources;
+    self.forceExports = forceExport;
   },
 
   // If a package appears twice in a 'self.uses' list, keep only the
@@ -438,7 +450,7 @@ _.extend(Package.prototype, {
     });
     self._uniquifyPackages();
 
-    var sources = {
+    self.sources = {
       use: {
         client: sources_except("use", "client", "server"),
         server: sources_except("use", "server", "client")
@@ -447,22 +459,22 @@ _.extend(Package.prototype, {
         server: sources_except("test", "server", "client", true)
       }
     };
-
-    self._compile(sources, {use: {client: [], server: []},
-                            test: {client: [], server: []}});
+    self.forceExports = {use: {client: [], server: []},
+                         test: {client: [], server: []}};
   },
 
-  // sources is a map from role to where to an array of source
-  // files. Process all source files through the appropriate handlers
-  // and run the prelink phase on any resulting JavaScript. Also add
-  // all provided source files to the package
-  // dependencies. forceExport is a the symbols that the package wants
-  // to export even if they are not declared in @export in the source,
-  // and is in the same format as self.exports.
-  _compile: function (sources, forceExport) {
+  // Process all source files through the appropriate handlers and run
+  // the prelink phase on any resulting JavaScript. Also add all
+  // provided source files to the package dependencies. Sets fields
+  // such as dependencies, exports, boundary, prelinkFiles, and
+  // resources. Idempotent.
+  ensureCompiled: function (packageSearchOptions) {
     var self = this;
     var allSources = {};
     var isApp = ! self.name;
+
+    if (self.isCompiled)
+      return;
 
     _.each(["use", "test"], function (role) {
       _.each(["client", "server"], function (where) {
@@ -507,20 +519,26 @@ _.extend(Package.prototype, {
             throw new Error("'where' is deprecated here and if provided " +
                             "must be '" + where + "'");
 
-          (type === "js" ? js : resources).push({
-            type: options.type,
-            data: data,
-            servePath: options.path
-          });
+          if (options.type === "js") {
+            js.push({
+              source: data.toString('utf8'),
+              servePath: options.path
+            });
+          } else {
+            resources.push({
+              type: options.type,
+              data: data,
+              servePath: options.path
+            });
+          }
         };
 
-        _.each(sources[role][where], function (relPath) {
+        _.each(self.sources[role][where], function (relPath) {
           allSources[relPath] = true;
 
           var ext = path.extname(relPath).substr(1);
-          // XXX XXX XXX MUST PASS packageSearchOptions
           var handler = self._getSourceHandler(role, where, ext,
-                                               /*self.packageSearchOptions*/);
+                                               packageSearchOptions);
           if (! handler) {
             // If we don't have an extension handler, serve this file
             // as a static resource.
@@ -552,7 +570,7 @@ _.extend(Package.prototype, {
           // XXX report an error if there is a package called global-imports
           importStubServePath: '/packages/global-imports.js',
           name: self.name || null,
-          forceExport: forceExport[role][where]
+          forceExport: self.forceExports[role][where]
         });
 
         self.prelinkFiles[role][where] = results.files;
@@ -563,6 +581,7 @@ _.extend(Package.prototype, {
     });
 
     self.dependencies = _.union(self.dependencies, _.keys(allSources));
+    self.isCompiled = true;
   },
 
   // Find all files under this.source_root that have an extension we

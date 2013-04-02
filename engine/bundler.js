@@ -281,7 +281,8 @@ _.extend(Bundle.prototype, {
       // ** from the package plus the output of running the JavaScript
       // ** linker.
 
-      var resources = _.clone(slice.pkg[slice.role][slice.where].resources);
+      slice.pkg.ensureCompiled(self.packageSearchOptions);
+      var resources = _.clone(slice.pkg.resources[slice.role][slice.where]);
 
       var isApp = ! slice.pkg.name;
       // Compute imports by merging the exports of all of the
@@ -296,6 +297,7 @@ _.extend(Bundle.prototype, {
       _.each(_.values(slice.pkg.uses[slice.role][slice.where]), function (otherPkgName){
         var otherPkg = self.getPackage(otherPkgName);
         if (otherPkg.name && ! slice.pkg.unordered[otherPkg.name]) {
+          otherPkg.ensureCompiled(); // make sure otherPkg.exports is valid
           _.each(otherPkg.exports.use[slice.where], function (symbol) {
             imports[symbol] = otherPkg.name;
           });
@@ -306,8 +308,8 @@ _.extend(Bundle.prototype, {
       var files = linker.link({
         imports: imports,
         useGlobalNamespace: isApp,
-        prelinkFiles: slice.pkg[slice.role][slice.where].prelinkFiles,
-        boundary: slice.pkg[slice.role][slice.where].boundary
+        prelinkFiles: slice.pkg.prelinkFiles[slice.role][slice.where],
+        boundary: slice.pkg.boundary[slice.role][slice.where]
       });
 
       // Add each output as a resource
@@ -320,7 +322,7 @@ _.extend(Bundle.prototype, {
       });
 
       // ** Emit the resources
-      _.each(slice.resources, function (resource) {
+      _.each(resources, function (resource) {
         if (resource.type === "js") {
           self.files[slice.where][resource.servePath] = resource.data;
           self.js[slice.where].push(resource.servePath);
