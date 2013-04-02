@@ -82,16 +82,21 @@ var Slice = function (pkg, role, where) {
   // data: The contents of this resource, as a Buffer. For example,
   // for "head", the data to insert in <head>; for "js", the
   // JavaScript source code (which may be subject to further
-  // processing such as minification or linking as we move through the
-  // build process); for "static", the contents of a static resource
-  // such as an image.
+  // processing such as minification); for "static", the contents of a
+  // static resource such as an image.
   //
   // servePath: The (absolute) path at which the resource would prefer
   // to be served. Interpretation varies by type. For example, always
   // honored for "static", ignored for "head" and "body", sometimes
-  // honored for JavaScript but ignored if we are concatenating (for
-  // minification or linking purposes.)
+  // honored for CSS but ignored if we are concatenating.
   self.resources = [];
+
+  // Prelink output. 'boundary' is a magic cookie used for inserting
+  // imports. 'prelinkFiles' is the partially linked JavaScript
+  // code. Both of these are inputs into the final link phase, which
+  // inserts the final JavaScript resources into 'resources'.
+  self.boundary = null;
+  self.prelinkFiles = null;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -245,6 +250,51 @@ _.extend(Bundle.prototype, {
               slice.where);
     });
 
+    //////////////////// link ////////////////////
+
+    var isApp = ! slice.pkg.name;
+
+    // Pull out the JavaScript files
+    var inputs = [];
+    var others = [];
+    _.each(slice.resources, function (resource) {
+      if (resource.type === "js") {
+        inputs.push({
+          source: resource.data.toString('utf8'),
+          servePath: resource.servePath
+        });
+      } else {
+        others.push(resource);
+      }
+    });
+    slice.resources = others;
+
+    // Phase 1 link
+    var servePathForRole = {
+      use: "/packages/",
+      test: "/package-tests/"
+    };
+
+    var results = linker.prelink({
+      inputFiles: inputs,
+      useGlobalNamespace: isApp,
+      combinedServePath: isApp ? null :
+        servePathForRole[slice.role] + slice.pkg.name + ".js",
+      // XXX report an error if there is a package called global-imports
+      importStubServePath: '/packages/global-imports.js',
+      name: slice.pkg.name || null,
+      forceExport: slice.pkg.exports[slice.role][slice.where]
+    });
+    slice.prelinkFiles = results.files;
+    slice.boundary = results.boundary;
+
+    // Save exports for use by future imports XXX saving on the
+    // Package object is a temporary hack ... In the future this
+    // export computation should be stored on the Package object to
+    // start with rather than be computed at link time (actually, we
+    // should store the entire prelink output.)
+    slice.pkg.exports[slice.role][slice.where] = results.exports;
+
     return slice;
   },
 
@@ -374,17 +424,11 @@ _.extend(Bundle.prototype, {
     this.nodeModulesDirs[relNodeModulesPath] = nodeModulesPath;
   },
 
-  // Run the linker over the JavaScript assets that have accumulated
-  // in each package. Transforms JavaScript assets to JavaScript
-  // assets, and computes the exports of each package.
+  // Runs the second half of the JavaScript linking begun when the
+  // slice was loaded. Transforms 'prelinkFiles' on each slice into
+  // actual "js" resources in slice.resources.
   link: function () {
     var self = this;
-
-    // We must do this in dependency order because we compute the
-    // exports as we go. In the future, hopefully we put packages
-    // though a build step during which we compute their exports and
-    // the export list becomes static package metadata so that we
-    // don't have to do this.
 
     _.each(self.slices, function (slice) {
       var isApp = ! slice.pkg.name;
@@ -407,59 +451,22 @@ _.extend(Bundle.prototype, {
         }
       });
 
-      // Pull out the JavaScript files
-      var inputs = [];
-      var others = [];
-      _.each(slice.resources, function (resource) {
-        if (resource.type === "js") {
-          inputs.push({
-            source: resource.data.toString('utf8'),
-            servePath: resource.servePath
-          });
-        } else {
-          others.push(resource);
-        }
-      });
-      slice.resources = others;
-
-      // Phase 1 link
-      var servePathForRole = {
-        use: "/packages/",
-        test: "/package-tests/"
-      };
-
-      var results = linker.prelink({
-        inputFiles: inputs,
-        useGlobalNamespace: isApp,
-        combinedServePath: isApp ? null :
-          servePathForRole[slice.role] + slice.pkg.name + ".js",
-        // XXX report an error if there is a package called global-imports
-        importStubServePath: '/packages/global-imports.js',
-        name: slice.pkg.name || null,
-        forceExport: slice.pkg.exports[slice.role][slice.where]
-      });
-
-      // Save exports for use by future imports XXX saving on the
-      // Package object is a temporary hack ... In the future this
-      // export computation should be stored on the Package object to
-      // start with rather than be computed at link time (actually, we
-      // should store the entire prelink output.)
-      slice.pkg.exports[slice.role][slice.where] = results.exports;
-
       // Phase 2 link
-      var outputFiles = linker.link({
+      var files = linker.link({
         imports: imports,
         useGlobalNamespace: isApp,
-        prelinkFiles: results.files,
-        boundary: results.boundary
+        prelinkFiles: slice.prelinkFiles,
+        boundary: slice.boundary
       });
 
+      slice.boundary = slice.prelinkFiles = null;
+
       // Add each output as a resource
-      _.each(outputFiles, function (outputFile) {
+      _.each(files, function (file) {
         slice.resources.push({
           type: "js",
-          data: new Buffer(outputFile.source, 'utf8'),
-          servePath: outputFile.servePath
+          data: new Buffer(file.source, 'utf8'),
+          servePath: file.servePath
         });
       });
     });
