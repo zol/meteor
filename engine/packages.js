@@ -3,6 +3,7 @@ var _ = require('underscore');
 var files = require('./files.js');
 var warehouse = require('./warehouse.js');
 var meteorNpm = require('./meteor_npm.js');
+var linker = require(path.join(__dirname, 'linker.js'));
 var fs = require('fs');
 
 // Under the hood, packages in the library (/package/foo), and user
@@ -502,9 +503,9 @@ _.extend(Package.prototype, {
             data = fs.readFileSync(source_file);
           }
 
-          if (options.where && options.where !== slice.where)
+          if (options.where && options.where !== where)
             throw new Error("'where' is deprecated here and if provided " +
-                            "must be '" + slice.where + "'");
+                            "must be '" + where + "'");
 
           (type === "js" ? js : resources).push({
             type: options.type,
@@ -513,28 +514,28 @@ _.extend(Package.prototype, {
           });
         };
 
-        _.each(sources[slice.role][slice.where], function (relPath) {
-          allSources[source] = true;
+        _.each(sources[role][where], function (relPath) {
+          allSources[relPath] = true;
 
           var ext = path.extname(relPath).substr(1);
           // XXX XXX XXX MUST PASS packageSearchOptions
-          var handler = self._getSourceHandler(slice.role, slice.where, ext,
+          var handler = self._getSourceHandler(role, where, ext,
                                                /*self.packageSearchOptions*/);
           if (! handler) {
             // If we don't have an extension handler, serve this file
             // as a static resource.
             resources.push({
               type: "static",
-              data: fs.readFileSync(path.join(slice.pkg.source_root, relPath)),
-              servePath: path.join(slice.pkg.serve_root, relPath)
+              data: fs.readFileSync(path.join(self.source_root, relPath)),
+              servePath: path.join(self.serve_root, relPath)
             });
             return;
           }
 
           handler({add_resource: add_resource},
-                  path.join(slice.pkg.source_root, relPath),
-                  path.join(slice.pkg.serve_root, relPath),
-                  slice.where);
+                  path.join(self.source_root, relPath),
+                  path.join(self.serve_root, relPath),
+                  where);
         });
 
         // Phase 1 link
@@ -544,7 +545,7 @@ _.extend(Package.prototype, {
         };
 
         var results = linker.prelink({
-          inputFiles: inputs,
+          inputFiles: js,
           useGlobalNamespace: isApp,
           combinedServePath: isApp ? null :
             servePathForRole[role] + self.name + ".js",
@@ -557,6 +558,7 @@ _.extend(Package.prototype, {
         self.prelinkFiles[role][where] = results.files;
         self.boundary[role][where] = results.boundary;
         self.exports[role][where] = results.exports
+        self.resources[role][where] = resources;
       });
     });
 
