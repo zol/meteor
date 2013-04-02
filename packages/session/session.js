@@ -11,6 +11,7 @@ var parse = function (serialized) {
   return EJSON.parse(serialized);
 };
 
+// @export Session
 Session = _.extend({}, {
   keys: {}, // key -> value
   keyDeps: {}, // key -> Dependency
