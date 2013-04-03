@@ -607,7 +607,7 @@ Fiber(function () {
         nodeModulesMode: 'copy',
         minify: true,  // XXX allow --debug
         releaseStamp: context.releaseVersion,
-        packageSearchOptions: context.packageSearchOptions
+        library: new packages.Library(context.packageSearchOptions)
       });
       if (errors) {
         process.stdout.write("Errors prevented bundling:\n");
@@ -760,7 +760,7 @@ Fiber(function () {
             nodeModulesMode: 'skip',
             minify: !new_argv.debug,
             releaseStamp: context.releaseVersion,
-            packageSearchOptions: context.packageSearchOptions
+            library: new packages.Library(context.packageSearchOptions)
           }
         });
       }
@@ -908,7 +908,7 @@ Fiber(function () {
           testPackages: testPackages,
           minify: new_argv.production,
           releaseStamp: context.releaseVersion,
-          packageSearchOptions: context.packageSearchOptions
+          library: new packages.Library(context.packageSearchOptions)
         }, {
           site: new_argv.deploy,
           settings: new_argv.settings && runner.getSettings(new_argv.settings)
