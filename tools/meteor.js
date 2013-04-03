@@ -86,10 +86,10 @@ Fiber(function () {
           "Please check to make sure that you are online.");
       }
     }
-    context.packageSearchOptions = {
+    context.library = new packages.Library({
       appDir: context.appDir,
       releaseManifest: context.releaseManifest
-    };
+    });
   };
 
   var calculateReleaseVersion = function (argv) {
@@ -477,7 +477,7 @@ Fiber(function () {
       }
 
       requireDirInApp('add');
-      var all = (new packages.Library(context.packageSearchOptions)).list();
+      var all = context.library.list();
       var using = {};
       _.each(project.get_packages(context.appDir), function (name) {
         using[name] = true;
@@ -563,7 +563,7 @@ Fiber(function () {
       }
 
       requireDirInApp('list');
-      var list = (new packages.Library(context.packageSearchOptions)).list()
+      var list = context.library.list();
       var names = _.keys(list);
       names.sort();
       var pkgs = [];
@@ -608,7 +608,7 @@ Fiber(function () {
         nodeModulesMode: 'copy',
         minify: true,  // XXX allow --debug
         releaseStamp: context.releaseVersion,
-        library: new packages.Library(context.packageSearchOptions)
+        library: context.library
       });
       if (errors) {
         process.stdout.write("Errors prevented bundling:\n");
@@ -761,7 +761,7 @@ Fiber(function () {
             nodeModulesMode: 'skip',
             minify: !new_argv.debug,
             releaseStamp: context.releaseVersion,
-            library: new packages.Library(context.packageSearchOptions)
+            library: context.library
           }
         });
       }
@@ -866,9 +866,8 @@ Fiber(function () {
 
       var testPackages;
       if (_.isEmpty(argv._)) {
-        testPackages = _.keys((new packages.Library(context.packageSearchOptions)).list());
+        testPackages = _.keys(context.library.list());
       } else {
-        context.packageSearchOptions.preloadedPackages = {};
         testPackages = _.map(argv._, function (p) {
           // If it's a package name, the bundler will resolve it using
           // context.packageSearchOptions later.
@@ -880,8 +879,7 @@ Fiber(function () {
           // have a trailing slash.
           var packageDir = path.resolve(p);
           var packageName = path.basename(packageDir);
-          context.packageSearchOptions.preloadedPackages[packageName] =
-            packages.loadFromDir(packageName, packageDir);
+          context.library.preload(packageName, packageDir);
           return packageName;
         });
       }
@@ -892,7 +890,7 @@ Fiber(function () {
       // on each other.
       //
       // Note: context.appDir now is DIFFERENT from
-      // bundleOptions.packageSearchOptions.appDir: we are bundling the test
+      // bundleOptions.library.appDir: we are bundling the test
       // runner app, but finding app packages from the current app (if any).
       context.appDir = files.mkdtemp('meteor-test-run');
       files.cp_r(path.join(__dirname, 'test-runner-app'), context.appDir);
@@ -909,7 +907,7 @@ Fiber(function () {
           testPackages: testPackages,
           minify: new_argv.production,
           releaseStamp: context.releaseVersion,
-          library: new packages.Library(context.packageSearchOptions)
+          library: context.library
         }, {
           site: new_argv.deploy,
           settings: new_argv.settings && runner.getSettings(new_argv.settings)
@@ -987,7 +985,7 @@ Fiber(function () {
     }
     // dev bundle is downloaded by the wrapper script. We just need to install
     // NPM dependencies.
-    _.each((new Packages.Library(context.packageSearchOptions)).list(), function (p) {
+    _.each(context.library.list(), function (p) {
       p.installNpmDependencies();
     });
     process.exit(0);
