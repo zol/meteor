@@ -477,7 +477,7 @@ Fiber(function () {
       }
 
       requireDirInApp('add');
-      var all = packages.list(context.packageSearchOptions);
+      var all = (new packages.Library(context.packageSearchOptions)).list();
       var using = {};
       _.each(project.get_packages(context.appDir), function (name) {
         using[name] = true;
@@ -563,7 +563,7 @@ Fiber(function () {
       }
 
       requireDirInApp('list');
-      var list = packages.list(context.packageSearchOptions);
+      var list = (new packages.Library(context.packageSearchOptions)).list()
       var names = _.keys(list);
       names.sort();
       var pkgs = [];
@@ -866,7 +866,7 @@ Fiber(function () {
 
       var testPackages;
       if (_.isEmpty(argv._)) {
-        testPackages = _.keys(packages.list(context.packageSearchOptions));
+        testPackages = _.keys((new packages.Library(context.packageSearchOptions)).list());
       } else {
         context.packageSearchOptions.preloadedPackages = {};
         testPackages = _.map(argv._, function (p) {
@@ -987,7 +987,7 @@ Fiber(function () {
     }
     // dev bundle is downloaded by the wrapper script. We just need to install
     // NPM dependencies.
-    _.each(packages.list(context.packageSearchOptions), function (p) {
+    _.each((new Packages.Library(context.packageSearchOptions)).list(), function (p) {
       p.installNpmDependencies();
     });
     process.exit(0);
