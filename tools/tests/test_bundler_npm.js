@@ -125,7 +125,7 @@ var looksInstalled = function (nodeModulesDir, name) {
 /// TESTS
 ///
 
-var library = new packages.Library();
+var library = new library.Library();
 
 console.log("app that uses gcd - clean run");
 assert.doesNotThrow(function () {
