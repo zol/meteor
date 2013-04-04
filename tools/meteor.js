@@ -570,7 +570,7 @@ Fiber(function () {
       _.each(names, function (name) {
         pkgs.push(list[name]);
       });
-      process.stdout.write("\n" + library.format_list(pkgs) + "\n");
+      process.stdout.write("\n" + library.formatList(pkgs) + "\n");
     }
   });
 
