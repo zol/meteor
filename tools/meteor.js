@@ -1002,7 +1002,7 @@ Fiber(function () {
     // dev bundle is downloaded by the wrapper script. We just need to install
     // NPM dependencies.
     _.each(context.library.list(), function (p) {
-      p.installNpmDependencies();
+      p.preheat();
     });
     process.exit(0);
   };
