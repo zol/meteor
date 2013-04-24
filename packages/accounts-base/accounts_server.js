@@ -279,6 +279,46 @@ Accounts.updateOrCreateUserFromExternalService = function(
   }
 };
 
+// Augments an existing user with a 3rd party account.
+//
+// @param userId {String} Id of account to augment.
+// @param serviceName {String} Service name (eg, twitter).
+// @param serviceData {Object} Data to store in the user's record
+//        under services[serviceName]. Must include an "id" field
+//        which is a unique identifier for the user in the service.
+// @param options {Object, optional} Other options to pass to insertUserDoc
+//        (eg, profile)
+// @returns {Object} Object with token and id keys, like the result
+//        of the "login" method.
+Accounts.augmentUserWithExternalService = function(
+  userId, serviceName, serviceData, options, state) {
+  options = _.clone(options || {});
+
+  debugger;
+  if (serviceName === "password" || serviceName === "resume")
+    throw new Error(
+      "Can't use augmentUserWithExternalService with internal service "
+        + serviceName);
+
+  var user = Meteor.users.findOne({_id: userId});
+  if (!user)
+    throw new Error(
+      "augmentUserWithExternalService cant't find user with id " + userId);
+
+  var setAttrs = {};
+  _.each(serviceData, function(value, key) {
+    //don't store the id as we're just augmenting
+    if (key != 'id')
+      setAttrs["services." + serviceName + "." + key] = value;
+  });
+
+  Meteor.users.update(
+    user._id,
+    {$set: setAttrs});
+
+  return {token: user.services.resume.loginTokens[0], id: user._id};
+};
+
 
 ///
 /// PUBLISHING DATA

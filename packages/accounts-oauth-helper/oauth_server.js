@@ -20,6 +20,7 @@ Accounts.oauth._services = {};
 //       up in the user's services[name] field
 //     - `null` if the user declined to give permissions
 Accounts.oauth.registerService = function (name, version, handleOauthRequest) {
+  //ZOL:console.log('oauth:registerService: name:' + name);
   if (Accounts.oauth._services[name])
     throw new Error("Already registered the " + name + " OAuth service");
 
@@ -104,6 +105,8 @@ Accounts.oauth._middleware = function (req, res, next) {
       return;
     }
 
+    console.log('oauth:_middleware: serviceName:' + serviceName);
+
     var service = Accounts.oauth._services[serviceName];
 
     // Skip everything if there's no service set by the oauth middleware
@@ -127,6 +130,7 @@ Accounts.oauth._middleware = function (req, res, next) {
     // is still open at this point, ignoring the 'close' or 'redirect'
     // we were passed. But then the developer wouldn't be able to
     // style the error or react to it in any way.
+    // console.log('_middleware:check debugger');
     if (req.query.state && err instanceof Error)
       Accounts.oauth._loginResultForState[req.query.state] = err;
 
@@ -150,6 +154,7 @@ Accounts.oauth._middleware = function (req, res, next) {
 // @returns {String|null} e.g. "facebook", or null if this isn't an
 // oauth request
 var oauthServiceName = function (req) {
+  console.log('oauth:oauthServiceName: url:' + req.url);
   // req.url will be "/_oauth/<service name>?<action>"
   var barePath = req.url.substring(0, req.url.indexOf('?'));
   var splitPath = barePath.split('/');

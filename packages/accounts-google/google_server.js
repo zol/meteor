@@ -1,8 +1,10 @@
 Accounts.oauth.registerService('google', 2, function(query) {
-
+  console.log('oauth:handle:getting token..., query:' + EJSON.stringify(query));
   var response = getTokens(query);
   var accessToken = response.accessToken;
+  console.log('oauth:handle:got token:' + accessToken);
   var identity = getIdentity(accessToken);
+  console.log('oauth:handle:got identity:' + identity);
 
   var serviceData = {
     accessToken: accessToken,
@@ -46,7 +48,7 @@ var getTokens = function (query) {
       redirect_uri: Meteor.absoluteUrl("_oauth/google?close"),
       grant_type: 'authorization_code'
     }});
-
+  
 
   if (result.error) { // if the http response was an error
     throw new Error("Failed to complete OAuth handshake with Google. " +

@@ -14,6 +14,9 @@ Meteor.loginWithGoogle = function (options, callback) {
   }
 
   var state = Random.id();
+  
+  if (Meteor.userId())
+    state = state + "," + Meteor.userId();
 
   // always need this to get user id from google.
   var requiredScope = ['https://www.googleapis.com/auth/userinfo.profile'];
@@ -24,7 +27,8 @@ Meteor.loginWithGoogle = function (options, callback) {
   var flatScope = _.map(scope, encodeURIComponent).join('+');
 
   // https://developers.google.com/accounts/docs/OAuth2WebServer#formingtheurl
-  var accessType = options.requestOfflineToken ? 'offline' : 'online';
+  //var accessType = options.requestOfflineToken ? 'offline' : 'online';
+  var accessType = 'online';
 
   var loginUrl =
         'https://accounts.google.com/o/oauth2/auth' +
